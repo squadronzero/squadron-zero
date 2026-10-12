@@ -1,7 +1,10 @@
-# Data stays out of git (too large). Raw files live on Google Drive.
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
+# Data stays out of git (too large). Raw files live on shared Google Drive.
+data/raw/**
+data/processed/**
+!data/raw/florida/
+!data/raw/global/
+!data/raw/florida/.gitkeep
+!data/raw/global/.gitkeep
 !data/processed/.gitkeep
 
 # Python
