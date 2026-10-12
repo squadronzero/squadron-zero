@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import region
 from .adapters import get_adapter
 from .config import Settings
 from .contract import L1_COLUMNS, conform, validate_l1
@@ -26,9 +27,14 @@ PARTITIONS = ["sensor_family", "year", "month"]
 def apply_filters(df: pd.DataFrame, settings: Settings) -> tuple[pd.DataFrame, Counter]:
     """Drop rows that fail any filter. Each row is counted once, under the first reason it fails."""
     f = settings["filters"]
+    coords_ok = df["lat"].between(-90, 90) & df["lon"].between(-180, 180)
+    in_region = region.inside(settings, df["lon"].fillna(0), df["lat"].fillna(0))
+    outside = (pd.Series(~in_region, index=df.index) if in_region is not None
+               else pd.Series(False, index=df.index))
     reasons: list[tuple[str, pd.Series]] = [
         ("bad_datetime", df["acq_datetime_utc"].isna()),
-        ("bad_coordinates", ~(df["lat"].between(-90, 90) & df["lon"].between(-180, 180))),
+        ("bad_coordinates", ~coords_ok),
+        ("outside_region", outside),
         ("unknown_satellite", ~df["satellite"].isin(["Terra", "Aqua", "S-NPP", "NOAA-20", "NOAA-21"])),
         ("bad_frp", df["frp_mw"].isna() | ~df["frp_mw"].between(f["frp_min_mw"], f["frp_max_mw"])),
         ("bad_daynight", ~df["daynight"].isin(["D", "N"])),

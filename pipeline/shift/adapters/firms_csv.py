@@ -39,7 +39,23 @@ SATELLITE_NAMES = {
 VIIRS_CONFIDENCE = {"l": "low", "low": "low", "n": "nominal", "nominal": "nominal", "h": "high", "high": "high"}
 
 
-def detect_family(columns: list[str]) -> str:
+MODIS_SATELLITES = {"Terra", "Aqua"}
+VIIRS_SATELLITES = {"S-NPP", "NOAA-20", "NOAA-21"}
+
+
+def detect_family(columns: list[str], satellites: list[str] | None = None) -> str:
+    """Decide MODIS or VIIRS for one file.
+
+    The satellite names are checked first, because FIRMS does not always use the
+    same column names: some VIIRS downloads (Oct 2026) use `brightness` and
+    `bright_t31` instead of `bright_ti4` and `bright_ti5`. Column names are the fallback.
+    """
+    if satellites:
+        names = {SATELLITE_NAMES.get(str(s).strip().lower()) for s in satellites} - {None}
+        if names and names <= VIIRS_SATELLITES:
+            return "VIIRS"
+        if names and names <= MODIS_SATELLITES:
+            return "MODIS"
     cols = {c.lower() for c in columns}
     if "bright_ti4" in cols:
         return "VIIRS"
@@ -51,8 +67,10 @@ def detect_family(columns: list[str]) -> str:
 def read(path: Path, settings, chunk_rows: int) -> Iterator[pd.DataFrame]:
     """Yield Level 1 frames (unfiltered) from one FIRMS CSV file."""
     path = Path(path)
-    header = pd.read_csv(path, nrows=0).columns.tolist()
-    family = detect_family(header)
+    sample = pd.read_csv(path, nrows=200, dtype=str, keep_default_na=False)
+    sample.columns = [COLUMN_ALIASES.get(c.lower(), c.lower()) for c in sample.columns]
+    sats = sample["satellite"].tolist() if "satellite" in sample.columns else None
+    family = detect_family(sample.columns.tolist(), sats)
     is_nrt = "nrt" in path.name.lower()
     mapping = settings["confidence_mapping"]
 

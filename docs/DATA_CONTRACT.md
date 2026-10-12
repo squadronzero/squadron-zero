@@ -43,7 +43,7 @@ Storage: Parquet, `data/processed/<dataset>/detections/sensor_family=<MODIS|VIIR
 
 Rules:
 
-1. Only rows passing the filters in `config/settings.yaml` are kept.
+1. Only rows passing the filters in `config/settings.yaml` are kept. If the dataset has a boundary under `regions.clip` (Florida does), rows outside it are dropped and counted as `outside_region`.
 2. Duplicate detections (same satellite, time, latitude and longitude) are removed. Archive rows win over NRT rows.
 3. Every rejected row is counted by reason in the run report.
 

@@ -27,6 +27,14 @@ outputs:
 grid:
   resolution_deg: 0.05            # D4 decided 11 Oct 2026
 
+regions:
+  # Optional boundary per dataset (GeoJSON). Detections outside it are dropped and
+  # counted as outside_region. Datasets not listed (global) are not clipped.
+  # Florida: v1's FIRMS request covered the state outline, not the whole box,
+  # so the clip is needed to reproduce v1 (D16).
+  clip:
+    florida: config/regions/florida.geojson
+
 filters:
   # FIRMS `type` field: 0 = presumed vegetation fire, 1 = active volcano,
   # 2 = other static land source (gas flares, industry), 3 = offshore.

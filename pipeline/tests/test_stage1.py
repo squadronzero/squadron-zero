@@ -60,6 +60,40 @@ def test_family_detection():
         firms_csv.detect_family(["latitude", "longitude"])
 
 
+def test_region_clip(tmp_path, project):
+    """A dataset with a boundary drops detections outside it; others are untouched."""
+    import json
+    box = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {},
+           "geometry": {"type": "Polygon", "coordinates": [[[-82, 27], [-81, 27], [-81, 28], [-82, 28], [-82, 27]]]}}]}
+    (tmp_path / "box.geojson").write_text(json.dumps(box))
+    project.raw.setdefault("regions", {})["clip"] = {"test": "box.geojson"}
+    report = run_ingest(project)
+    t = report["totals"]
+    assert t["outside_region"] > 0
+    det = read_detections(project)
+    assert det["lat"].between(27, 28).all() and det["lon"].between(-82, -81).all()
+    # Florida boundary shipped with the repo loads and contains Orlando, not Atlanta.
+    from shift import region
+    fl = load_settings(DEFAULT_SETTINGS, dataset="florida")
+    assert list(region.inside(fl, [-81.38, -84.39], [28.54, 33.75])) == [True, False]
+    assert region.inside(load_settings(DEFAULT_SETTINGS, dataset="global"), [0], [0]) is None
+
+
+def test_viirs_file_with_modis_style_columns(tmp_path, project):
+    """Real Florida VIIRS download (Oct 2026): `brightness`/`bright_t31` columns,
+    satellite and instrument both "SNPP". Must still be read as VIIRS."""
+    f = tmp_path / "fire_archive_SV-C2_florida.csv"
+    f.write_text("\n".join([
+        MODIS_HEADER,
+        "27.01686,-80.13492,298.55,0.36,0.58,2012-01-20,0622,SNPP,SNPP,n,2,283.53,1.29,N,0",
+        "27.01654,-80.13119,307.4,0.36,0.58,2012-01-20,0622,SNPP,SNPP,h,2,282.91,0.9,N,0",
+    ]) + "\n")
+    df = pd.concat(firms_csv.read(f, project, 10))
+    assert set(df["sensor_family"]) == {"VIIRS"}
+    assert set(df["satellite"]) == {"S-NPP"}
+    assert list(df["confidence_class"]) == ["nominal", "high"]
+
+
 def test_grid_roundtrip_and_edges():
     r = 0.05
     lat = np.array([27.1234, -89.999, 90.0, 0.0])
