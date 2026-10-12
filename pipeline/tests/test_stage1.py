@@ -60,6 +60,23 @@ def test_family_detection():
         firms_csv.detect_family(["latitude", "longitude"])
 
 
+def test_zip_input_matches_csv_input(tmp_path, project):
+    """A FIRMS zip dropped into raw/ gives exactly the same result as its CSVs."""
+    import zipfile
+    from_csv = run_ingest(project)["totals"]
+    raw = project.raw_dir
+    with zipfile.ZipFile(raw / "DL_FIRE_test.zip", "w") as zf:
+        for f in sorted(raw.glob("*.csv")):
+            zf.write(f, f.name)
+            f.unlink()
+        zf.writestr("Readme.txt", "not a csv")
+    report = run_ingest(project)
+    assert report["totals"] == from_csv
+    assert set(report["files"]) == {"fire_archive_M-C61_test.csv", "fire_archive_SV-C2_test.csv",
+                                     "fire_nrt_SV-C2_test.csv"}
+    assert sorted(p.name for p in raw.iterdir()) == ["DL_FIRE_test.zip"]  # nothing unpacked into raw/
+
+
 def test_region_clip(tmp_path, project):
     """A dataset with a boundary drops detections outside it; others are untouched."""
     import json

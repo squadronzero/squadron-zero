@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
+import zipfile
 from collections import Counter
 from pathlib import Path
 
@@ -51,6 +53,27 @@ def apply_filters(df: pd.DataFrame, settings: Settings) -> tuple[pd.DataFrame, C
     return df[keep], counts
 
 
+def _expand_zips(files: list[Path], settings: Settings):
+    """Yield CSV paths. A FIRMS .zip is unpacked one CSV at a time into local scratch
+    space (never into raw/), processed, then deleted, so Drive only holds the zip."""
+    for path in files:
+        if path.suffix.lower() != ".zip":
+            yield path
+            continue
+        tmp_root = settings["fetch"].get("tmp_dir") if "fetch" in settings.raw else None
+        work = Path(tempfile.mkdtemp(prefix="shift_zip_", dir=tmp_root))
+        try:
+            with zipfile.ZipFile(path) as zf:
+                for member in sorted(n for n in zf.namelist() if n.lower().endswith(".csv")):
+                    target = work / Path(member).name
+                    with zf.open(member) as src, open(target, "wb") as dst:
+                        shutil.copyfileobj(src, dst, 1 << 20)
+                    yield target
+                    target.unlink(missing_ok=True)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+
 def run_ingest(settings: Settings, files: list[Path] | None = None) -> dict:
     adapter = get_adapter(settings["inputs"]["adapter"])
     chunk_rows = int(settings["processing"]["chunk_rows"])
@@ -70,7 +93,7 @@ def run_ingest(settings: Settings, files: list[Path] | None = None) -> dict:
     staging.mkdir(parents=True)
 
     report = {"stage": "ingest", "files": {}, "totals": Counter()}
-    for path in files:
+    for path in _expand_zips(files, settings):
         file_counts: Counter = Counter()
         for frame in adapter.read(path, settings, chunk_rows):
             file_counts["rows_read"] += len(frame)

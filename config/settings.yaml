@@ -15,8 +15,10 @@ inputs:
   # Folder holding raw FIRMS CSV files (archive and/or NRT, MODIS and/or VIIRS).
   # Any file matching these patterns is picked up. The adapter detects the sensor from the columns.
   raw_dir: data/raw/{dataset}
+  # FIRMS .zip downloads can be dropped in as they are; CSVs inside are read directly.
   patterns:
     - "*.csv"
+    - "*.zip"
   adapter: firms_csv          # name of the adapter in pipeline/shift/adapters/
 
 outputs:
