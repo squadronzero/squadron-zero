@@ -12,11 +12,13 @@ Field names are lower snake case. Times are UTC. Distances are in degrees (WGS84
 
 ---
 
+`<dataset>` is `florida` or `global` (see `config/settings.yaml`). For the global dataset, years up to `fetch.last_year` are built by the fetch stage straight from FIRMS yearly world files, so they exist only at Level 2.
+
 ## Level 1: Detections
 
 One row per satellite active-fire detection, after cleaning and filtering.
 
-Storage: Parquet, `data/processed/detections/sensor_family=<MODIS|VIIRS>/year=<YYYY>/month=<M>/`
+Storage: Parquet, `data/processed/<dataset>/detections/sensor_family=<MODIS|VIIRS>/year=<YYYY>/month=<M>/`
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -51,7 +53,7 @@ Rules:
 
 One row per grid cell, per day, per satellite, where at least one detection occurred. Cells with no detection are not stored (the grid is sparse).
 
-Storage: Parquet, `data/processed/celldays/sensor_family=<MODIS|VIIRS>/year=<YYYY>/month=<M>/`
+Storage: Parquet, `data/processed/<dataset>/celldays/sensor_family=<MODIS|VIIRS>/year=<YYYY>/month=<M>/`
 
 | Field | Type | Description |
 | --- | --- | --- |

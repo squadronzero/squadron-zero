@@ -4,16 +4,23 @@
 
 version: "0.0"
 
+# Which dataset to work on. Each dataset has its own raw and processed folders,
+# so Florida (the v1 check) and global data never mix.
+#   florida : FIRMS form downloads for the v1 Florida box
+#   global  : FIRMS yearly world files (fetch stage) + recent-months form downloads
+# Override on the command line: python -m shift.run --dataset florida
+dataset: global
+
 inputs:
   # Folder holding raw FIRMS CSV files (archive and/or NRT, MODIS and/or VIIRS).
   # Any file matching these patterns is picked up. The adapter detects the sensor from the columns.
-  raw_dir: data/raw
+  raw_dir: data/raw/{dataset}
   patterns:
     - "*.csv"
   adapter: firms_csv          # name of the adapter in pipeline/shift/adapters/
 
 outputs:
-  processed_dir: data/processed
+  processed_dir: data/processed/{dataset}
   detections_subdir: detections   # Level 1: cleaned detections (contract L1)
   celldays_subdir: celldays       # Level 2: gridded cell-days (contract L2)
 
@@ -53,6 +60,9 @@ calibration:
   # MODIS Terra and Aqua are summed per cell-day; VIIRS uses S-NPP only (D8).
   modis_satellites: [Terra, Aqua]
   viirs_satellites: [S-NPP]
+  # Datasets the v1 calibration runs on. Global calibration is done per region in
+  # Phase 2 (loading every global year at once would not fit in Colab memory).
+  run_on_datasets: [florida, test]
   # Validation is reported at several scales. The calendar works at area-month
   # scale, so that is the headline number; cell-day is reported for honesty.
   validation_scales:
@@ -60,6 +70,25 @@ calibration:
     - {name: cell_month, time: month, space_deg: null}
     - {name: area025_month, time: month, space_deg: 0.25}
     - {name: region_month, time: month, space_deg: all}
+
+fetch:
+  # FIRMS publishes one zip per sensor per year with every country's detections.
+  # The fetch stage downloads each year, turns it straight into cell-days and deletes
+  # the raw files, so Drive only holds the much smaller processed data.
+  base_url: https://firms.modaps.eosdis.nasa.gov/data/country/zips/
+  # File name = <prefix>_<year>_all_countries.zip. If a prefix fails, the next is tried.
+  products:
+    MODIS:
+      prefixes: [modis]
+      first_year: 2002
+    VIIRS:
+      prefixes: [viirs-snpp, viirs_snpp, suomi-viirs]
+      first_year: 2012
+  # Last full year taken from the yearly files. Anything later comes from FIRMS form
+  # downloads placed in data/raw/global/ (one request covering 1 Jan to today).
+  last_year: 2025
+  # Local scratch folder for downloads (null = system temp). On Colab use local disk, not Drive.
+  tmp_dir: null
 
 processing:
   # Rows read per chunk. Lower this on Colab if memory runs out.

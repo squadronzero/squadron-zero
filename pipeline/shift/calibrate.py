@@ -116,6 +116,10 @@ def validate(pairs: pd.DataFrame, model: dict, scales: list[dict]) -> pd.DataFra
 
 def run_calibrate(settings: Settings) -> dict:
     cfg, periods = settings["calibration"], settings["periods"]
+    allowed = cfg.get("run_on_datasets")
+    if allowed and settings.dataset not in allowed:
+        return {"stage": "calibrate", "skipped": f"not run on dataset '{settings.dataset}'; "
+                f"global calibration is per region (Phase 2). Allowed: {allowed}"}
     cd = read_celldays(settings)
     pairs = build_pairs(cd, cfg["modis_satellites"], cfg["viirs_satellites"])
     train = split_window(pairs, periods["calibration_start"], periods["calibration_end"])

@@ -19,8 +19,12 @@ class Settings:
     def __getitem__(self, key: str) -> Any:
         return self.raw[key]
 
+    @property
+    def dataset(self) -> str:
+        return str(self.raw.get("dataset", "global"))
+
     def path(self, value: str) -> Path:
-        p = Path(value)
+        p = Path(value.format(dataset=self.dataset))
         return p if p.is_absolute() else self.root / p
 
     @property
@@ -44,8 +48,11 @@ class Settings:
         return float(self.raw["grid"]["resolution_deg"])
 
 
-def load_settings(path: str | Path | None = None, root: str | Path | None = None) -> Settings:
+def load_settings(path: str | Path | None = None, root: str | Path | None = None,
+                  dataset: str | None = None) -> Settings:
     path = Path(path) if path else DEFAULT_SETTINGS
     with open(path, encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
+    if dataset:
+        raw["dataset"] = dataset
     return Settings(raw=raw, root=Path(root) if root else REPO_ROOT)

@@ -18,6 +18,7 @@ pipeline/
   shift/adapters/firms_csv.py  converts FIRMS CSV files to Level 1
   shift/ingest.py              stage 1: clean, filter, de-duplicate -> L1 detections
   shift/aggregate.py           stage 2: grid to 0.05 deg cell-days -> L2
+  shift/fetch.py               downloads FIRMS yearly world files straight to cell-days
   shift/run.py                 one command runs every stage
   tests/                       automated checks
 data/                          not in git; raw files live on shared Google Drive
@@ -31,7 +32,7 @@ Planned: `api/` (FastAPI) and `web/` (React + MapLibre) in later phases.
 cd pipeline
 pip install -r requirements.txt
 python -m pytest -q        # all tests pass
-python -m shift.run        # reads data/raw/*.csv, writes data/processed/
+python -m shift.run --dataset florida   # reads data/raw/florida/, writes data/processed/florida/
 ```
 
 On Colab, follow `docs/COLAB_GUIDE.md`.
@@ -40,6 +41,7 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 
 | Stage | Input | Output | Status |
 | --- | --- | --- | --- |
+| fetch | FIRMS yearly world zips | L2 cell-days (global, no raw kept) | Done |
 | ingest | FIRMS CSV (archive + NRT) | L1 detections | Done |
 | aggregate | L1 | L2 cell-days, 0.05 deg | Done |
 | calibrate | L2 overlap 2012-2021 | v1 OLS model + validation at 4 scales | Done (v1 method) |

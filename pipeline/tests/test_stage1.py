@@ -22,7 +22,7 @@ VIIRS_NRT_HEADER = "latitude,longitude,bright_ti4,scan,track,acq_date,acq_time,s
 
 @pytest.fixture()
 def project(tmp_path: Path):
-    raw = tmp_path / "data" / "raw"
+    raw = tmp_path / "data" / "raw" / "test"
     raw.mkdir(parents=True)
     (raw / "fire_archive_M-C61_test.csv").write_text("\n".join([
         MODIS_HEADER,
@@ -47,6 +47,7 @@ def project(tmp_path: Path):
 
     cfg = yaml.safe_load(DEFAULT_SETTINGS.read_text())
     cfg["processing"]["chunk_rows"] = 2  # force several chunks per file
+    cfg["dataset"] = "test"
     settings_path = tmp_path / "settings.yaml"
     settings_path.write_text(yaml.safe_dump(cfg))
     return load_settings(settings_path, root=tmp_path)

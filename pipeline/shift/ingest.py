@@ -51,7 +51,11 @@ def run_ingest(settings: Settings, files: list[Path] | None = None) -> dict:
     if files is None:
         files = sorted({p for pat in settings["inputs"]["patterns"] for p in settings.raw_dir.glob(pat)})
     if not files:
-        raise FileNotFoundError(f"no input files in {settings.raw_dir}")
+        # Nothing to ingest (for example the global dataset before any recent-months
+        # download). Clear old detections so aggregate does not reuse stale data.
+        shutil.rmtree(settings.detections_dir, ignore_errors=True)
+        return {"stage": "ingest", "files": {}, "totals": {"rows_read": 0, "rows_final": 0},
+                "note": f"no input files in {settings.raw_dir}"}
 
     out_dir = settings.detections_dir
     staging = settings.processed_dir / "_staging_detections"
