@@ -148,7 +148,8 @@ def run_fetch(settings: Settings, years: list[int] | None = None, families: list
                         "seconds": round(time.time() - t0, 1)}
                 marker.write_text(json.dumps(info, indent=1))
                 report["years"][key] = {k: v for k, v in info.items() if k != "partitions"}
-                print(f"[fetch] {key}: {size_mb} MB, {counts.get('rows_read', 0):,} detections, "
+                print(f"[fetch] {key}: {size_mb} MB, {counts.get('rows_read', 0):,} rows read, "
+                      f"{counts.get('rows_kept', 0):,} kept, "
                       f"{counts.get('celldays', 0):,} cell-days, {info['seconds']} s", flush=True)
             finally:
                 shutil.rmtree(work, ignore_errors=True)
