@@ -101,6 +101,16 @@ calibration:
     - {name: area025_month, time: month, space_deg: 0.25}
     - {name: region_month, time: month, space_deg: all}
 
+counts:
+  # Phase 2 fix 1: detection-count harmonisation (stage `counts`). Active cell-days
+  # (0.05 deg cell with >= 1 detection) replace raw detections, then the MODIS record is
+  # scaled to VIIRS with a factor per test region and calendar month, fitted on the
+  # calibration years and tested on the holdout years.
+  source: MODIS            # Terra + Aqua merged per cell-day
+  reference: S-NPP
+  min_cells_per_month: 30  # fewer MODIS active cells than this -> use the region's all-year factor
+  exclude_gap_days: true   # leave out days when any of these satellites was not fully working
+
 fetch:
   # FIRMS publishes one zip per sensor per year with every country's detections.
   # The fetch stage downloads each year, turns it straight into cell-days and deletes

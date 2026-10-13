@@ -27,6 +27,7 @@ pipeline/
   shift/scan.py                re-reads yearly files: versions, non-fire sources, fingerprints
   shift/qc.py                  data health check (coverage, gaps, ratios)
   shift/crosscheck.py          global yearly files vs Florida form download
+  shift/counts.py              Phase 2 fix 1: detection-count harmonisation (the 2012 jump)
   shift/run.py                 one command runs every stage
   shift/quickstart.py          2-minute demo on samples/florida_sample.zip
   tests/                       automated checks
@@ -73,6 +74,7 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 | aggregate | L1 | L2 cell-days, 0.05 deg | Done |
 | calibrate | L2 overlap 2012-2021, satellite outage days left out | v1 OLS model + validation at 4 scales | Done (v1 method) |
 | quickstart | `samples/florida_sample.zip` | the whole method in seconds, in a temporary folder | Done |
+| counts | L2 global | detection-count harmonisation: active cell-days, MODIS scaled to VIIRS per region and month, 2012 jump measured | Phase 2, fix 1 |
 | harmonise | L2 + model | L3 harmonised record | Phase 2 |
 | validate | L3 + holdout years | metrics per region | Phase 2 |
 | calendar | L3 | climatology, anomalies, critical periods | Phase 3 |

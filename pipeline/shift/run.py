@@ -8,6 +8,7 @@
     python -m shift.run --dataset global --stage scan   # versions, non-fire sources, fingerprints
     python -m shift.run --dataset global --stage qc     # data health check
     python -m shift.run --dataset global --stage crosscheck  # yearly files vs Florida download
+    python -m shift.run --dataset global --stage counts      # Phase 2 fix 1: detection-count harmonisation
     python -m shift.run --settings path/to/other_settings.yaml
 
 Run from the `pipeline/` folder (or add it to PYTHONPATH).
@@ -21,6 +22,7 @@ import time
 from .aggregate import run_aggregate
 from .calibrate import run_calibrate
 from .config import load_settings
+from .counts import run_counts
 from .crosscheck import run_crosscheck
 from .fetch import run_fetch
 from .ingest import run_ingest, write_report
@@ -35,11 +37,13 @@ STAGES = {
     # Phase 3 adds: "calendar" (climatology, anomalies, critical periods)
 }
 # Stages that only run when asked for by name (downloads and checks).
-EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck": run_crosscheck}
+EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck": run_crosscheck,
+                "counts": run_counts}
 # What to print at the end of each stage (the full report is always saved as JSON).
 SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "qc": ["date_range", "days_by_status", "step_checks", "real_fires_in_mask_pct"],
-           "crosscheck": ["verdict", "totals"]}
+           "crosscheck": ["verdict", "totals"],
+           "counts": ["k_per_region", "outage_days_excluded"]}
 
 
 def main(argv: list[str] | None = None) -> None:
