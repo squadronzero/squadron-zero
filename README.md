@@ -1,8 +1,12 @@
 # MODIS-VIIRS-Harmonized-Global-Burning-Activity-Calendar-NASA-Space-Apps-Challenge-2026
 
-**SHIFT** (Satellite Harmonization & Integrated Fire Tracking) by Team Squadron Zero, for the NASA Space Apps Challenge 2026: *Harmonization of MODIS and VIIRS Hot Spots*.
+**SHIFT** (Satellite Harmonization & Integrated Fire Tracking) by Team Squadron Zero, for the NASA Space Apps Challenge 2026, theme *The Next Frontier*, challenge 9: **Harmonization of MODIS and VIIRS Hot Spots**.
 
 SHIFT turns MODIS (2000 onwards) and VIIRS (2012 onwards) active-fire detections into one consistent, uncertainty-aware burning-activity calendar for any area on Earth.
+
+Why now: NASA stops delivering Suomi NPP data on 1 November 2026, and the Terra and Aqua MODIS
+missions are near their end. A fire record that runs from 2000 to today only stays usable if the
+sensors are tied together.
 
 Version **0.0**. The system is built so that new source data can be swapped in without changing anything downstream: only the adapter and `config/settings.yaml` should need to change.
 
@@ -14,6 +18,7 @@ docs/
   SCIENTIFIC_SPECIFICATION.md  scientific questions and scope
   DATA_CONTRACT.md             exact format of every dataset (L1, L2, L3)
   COLAB_GUIDE.md               how to run the pipeline on Google Colab
+  AI_USE.md                    every AI tool used, what it did, what the team did
 pipeline/
   shift/adapters/firms_csv.py  converts FIRMS CSV files to Level 1
   shift/ingest.py              stage 1: clean, filter, de-duplicate -> L1 detections
@@ -73,11 +78,14 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 
 Each stage writes `data/processed/report_<stage>.json` with row counts and rejection reasons, so every number in the app can be traced back.
 
-## Data sources
+## NASA data sources used
 
-- NASA FIRMS MODIS Collection 6.1 active fires (Terra and Aqua), https://firms.modaps.eosdis.nasa.gov/
-- NASA FIRMS VIIRS 375 m active fires (Suomi NPP), https://firms.modaps.eosdis.nasa.gov/
-- Florida state outline (`config/regions/florida.geojson`): public-domain US state boundary
+| Dataset | What we use it for | How |
+| --- | --- | --- |
+| NASA FIRMS MODIS Collection 6.1 active fires (Terra and Aqua, 1 km), https://firms.modaps.eosdis.nasa.gov/ | The long record, 2000 onwards | Yearly world archive files 2002-2025 plus a form download for 2026; cleaned, gridded to 0.05 deg cell-days |
+| NASA FIRMS VIIRS 375 m active fires (Suomi NPP), https://firms.modaps.eosdis.nasa.gov/ | The reference sensor the MODIS record is calibrated to, 2012 onwards | Same route as MODIS; paired with MODIS on the same cell and day to fit and test the calibration |
+
+Other data: Florida state outline (`config/regions/florida.geojson`), a public-domain US state boundary.
 
 ## Tools and references
 
@@ -86,10 +94,10 @@ GitHub Actions. MODIS C6.1 and VIIRS 375 m active-fire user guides (NASA FIRMS).
 
 ## Use of AI
 
-Parts of the code, tests and documentation in this repository were written with the help
-of an AI assistant (Anthropic's Claude), reviewed and run by Team Squadron Zero. All data
-are NASA FIRMS data; no results are AI-generated.
+Code, tests and documentation were written with AI help (Claude), and the team used Gemini and
+ChatGPT as tutors for running the steps. The method, the decisions and every data run are the
+team's. Numbers come only from tested code. Full details: `docs/AI_USE.md`.
 
 ## Licence
 
-MIT
+Apache License 2.0 (see `LICENSE`).
