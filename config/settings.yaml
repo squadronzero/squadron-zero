@@ -111,6 +111,17 @@ counts:
   min_cells_per_month: 30  # fewer MODIS active cells than this -> use the region's all-year factor
   exclude_gap_days: true   # leave out days when any of these satellites was not fully working
 
+continuity:
+  # Phase 2 fix 2 (stage `continuity`, after `counts`): S-NPP per NOAA-20 active cell and
+  # fire power, per test region and calendar month. NOAA-20 data start in 2018 (partial
+  # year), so the fit uses 2019-2023 and the test 2024-2025.
+  source: NOAA-20
+  reference: S-NPP
+  fit_years: [2019, 2023]
+  test_years: [2024, 2025]
+  min_cells_per_month: 30
+  exclude_gap_days: true
+
 fetch:
   # FIRMS publishes one zip per sensor per year with every country's detections.
   # The fetch stage downloads each year, turns it straight into cell-days and deletes

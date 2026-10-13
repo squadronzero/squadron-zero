@@ -36,7 +36,7 @@ from .region import in_bbox, test_regions
 GROUPS = {"MODIS": ["Terra", "Aqua"], "Aqua": ["Aqua"], "Terra": ["Terra"],
           "S-NPP": ["S-NPP"], "NOAA-20": ["NOAA-20"]}
 GLOBAL = {"bbox": [-180.0, -90.0, 180.0, 90.0], "regime": "whole world"}
-COLS = ["acq_date", "cell_id", "cell_lat", "cell_lon", "satellite", "n_detections"]
+COLS = ["acq_date", "cell_id", "cell_lat", "cell_lon", "satellite", "n_detections", "frp_sum_mw"]
 
 
 def daily_series(settings: Settings) -> pd.DataFrame:
@@ -55,28 +55,30 @@ def daily_series(settings: Settings) -> pd.DataFrame:
             if len(sats) > 1:   # one cell-day counts once however many satellites saw it
                 g = (g.groupby(["acq_date", "cell_id"], as_index=False)
                       .agg(cell_lat=("cell_lat", "first"), cell_lon=("cell_lon", "first"),
-                           n_detections=("n_detections", "sum")))
+                           n_detections=("n_detections", "sum"), frp_sum_mw=("frp_sum_mw", "sum")))
             for name, reg in regions.items():
                 r = g if name == "global" else g[in_bbox(reg["bbox"], g["cell_lon"], g["cell_lat"])]
                 if r.empty:
                     continue
                 s = r.groupby("acq_date").agg(detections=("n_detections", "sum"),
-                                              active_cells=("cell_id", "size")).reset_index()
+                                              active_cells=("cell_id", "size"),
+                                              frp_mw=("frp_sum_mw", "sum")).reset_index()
                 s["region"], s["group"] = name, group
                 parts.append(s)
     if not parts:
-        return pd.DataFrame(columns=["region", "group", "acq_date", "detections", "active_cells"])
+        return pd.DataFrame(columns=["region", "group", "acq_date", "detections", "active_cells", "frp_mw"])
     out = pd.concat(parts, ignore_index=True)
     out["acq_date"] = pd.to_datetime(out["acq_date"]).dt.normalize()
     # A day can sit in two partitions only if it came from two sources; add them up.
-    return (out.groupby(["region", "group", "acq_date"], as_index=False)[["detections", "active_cells"]]
+    return (out.groupby(["region", "group", "acq_date"], as_index=False)[["detections", "active_cells", "frp_mw"]]
                .sum().astype({"detections": "int64", "active_cells": "int64"}))
 
 
 def _monthly(daily: pd.DataFrame, exclude: pd.DatetimeIndex | None) -> pd.DataFrame:
     d = daily if exclude is None or len(exclude) == 0 else daily[~daily["acq_date"].isin(exclude)]
     d = d.assign(year=d["acq_date"].dt.year, month=d["acq_date"].dt.month)
-    return d.groupby(["region", "group", "year", "month"], as_index=False)[["detections", "active_cells"]].sum()
+    cols = [c for c in ("detections", "active_cells", "frp_mw") if c in d.columns]
+    return d.groupby(["region", "group", "year", "month"], as_index=False)[cols].sum()
 
 
 def _years(start: str, end: str) -> list[int]:
@@ -215,4 +217,87 @@ def run_counts(settings: Settings) -> dict:
               + (val.to_string(index=False) if len(val) else "none"), flush=True)
         print("[counts] jump at the 2012 switch (1.0 = none):\n"
               + (step.to_string(index=False) if len(step) else "none"), flush=True)
+    return report
+
+
+# ---------------------------------------------------------------- fix 2: NOAA-20 continuity
+
+def run_continuity(settings: Settings) -> dict:
+    """Phase 2, fix 2: tie VIIRS NOAA-20 to VIIRS S-NPP (D8).
+
+    NASA stops delivering Suomi NPP data on 1 Nov 2026. NOAA-20 carries the same VIIRS
+    instrument, so over the 2018-2026 overlap we measure, per test region and calendar
+    month, S-NPP active cells (and fire power) per NOAA-20 active cell (fit years), test it
+    on later years, and show how NOAA-20 fills the S-NPP outage of 28 Apr-2 Jun 2026.
+    Reads the daily series written by the `counts` stage (run that first).
+    """
+    cfg = settings.raw.get("continuity") or {}
+    source, reference = cfg.get("source", "NOAA-20"), cfg.get("reference", "S-NPP")
+    fit = list(range(int(cfg.get("fit_years", [2019, 2023])[0]), int(cfg.get("fit_years", [2019, 2023])[1]) + 1))
+    test = list(range(int(cfg.get("test_years", [2024, 2025])[0]), int(cfg.get("test_years", [2024, 2025])[1]) + 1))
+    min_cells = int(cfg.get("min_cells_per_month", 30))
+    out = settings.processed_dir / "counts"
+    path = out / "daily.parquet"
+    if not path.exists():
+        return {"stage": "continuity", "note": "no counts/daily.parquet: run the counts stage first"}
+    daily = pd.read_parquet(path)
+    daily["acq_date"] = pd.to_datetime(daily["acq_date"])
+    if "frp_mw" not in daily.columns:
+        return {"stage": "continuity", "note": "daily.parquet has no fire power column: rerun the counts stage"}
+    bad = bad_days(settings, [source, reference]) if cfg.get("exclude_gap_days", True) else None
+    monthly = _monthly(daily, bad)
+    factors = fit_factors(monthly, source, reference, fit, min_cells)
+    val = validate(monthly, factors, source, reference, test)
+
+    # Fire power ratio per region (all fit months together) and its error on the test years.
+    m = monthly[monthly["group"].isin([source, reference])]
+    piv = m.pivot_table(index=["region", "year", "month"], columns="group", values="frp_mw", aggfunc="sum").dropna()
+    frp_rows = []
+    for region, r in piv.reset_index().groupby("region"):
+        f, t = r[r["year"].isin(fit)], r[r["year"].isin(test)]
+        if f[source].sum() <= 0:
+            continue
+        k_frp = f[reference].sum() / f[source].sum()
+        err = 100 * (t[source].sum() * k_frp - t[reference].sum()) / t[reference].sum() if t[reference].sum() else None
+        frp_rows.append({"region": region, "k_frp": round(float(k_frp), 4),
+                         "test_total_frp_error_pct": None if err is None else round(float(err), 2)})
+    frp = pd.DataFrame(frp_rows)
+
+    # Gap fill: days when S-NPP was silent or low but NOAA-20 was fine.
+    from .coverage import load_coverage
+    cov = load_coverage(settings)
+    gap_rows = []
+    if cov is not None:
+        st = cov.pivot_table(index="acq_date", columns="satellite", values="status", aggfunc="first")
+        if reference in st and source in st:
+            gap_days = st.index[(st[reference] != "ok") & (st[source] == "ok")]
+            k = factors.set_index(["region", "month"])["k"]
+            g = daily[(daily["group"] == source) & daily["acq_date"].isin(gap_days)].copy()
+            g["k"] = [k.get((r, d.month), np.nan) for r, d in zip(g["region"], g["acq_date"])]
+            g["snpp_equivalent_cells"] = (g["active_cells"] * g["k"]).round(1)
+            gap_rows = g
+    gap = gap_rows if isinstance(gap_rows, pd.DataFrame) else pd.DataFrame(gap_rows)
+
+    factors.to_csv(out / "continuity_factors.csv", index=False)
+    val.to_csv(out / "continuity_validation.csv", index=False)
+    frp.to_csv(out / "continuity_frp.csv", index=False)
+    if len(gap):
+        gap.to_csv(out / "continuity_gapfill.csv", index=False)
+
+    glob = gap[gap["region"] == "global"] if len(gap) else gap
+    report = {
+        "stage": "continuity", "source": source, "reference": reference,
+        "fit_years": [fit[0], fit[-1]], "test_years": [test[0], test[-1]],
+        "days_excluded": None if bad is None else int(len(bad)),
+        "k_cells_per_region": factors.groupby("region")["k_region"].first().round(3).to_dict() if len(factors) else {},
+        "frp": frp.to_dict("records"),
+        "test": val.to_dict("records"),
+        "gapfill": {"days": int(glob["acq_date"].nunique()) if len(glob) else 0,
+                    "first": str(glob["acq_date"].min().date()) if len(glob) else None,
+                    "last": str(glob["acq_date"].max().date()) if len(glob) else None},
+    }
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(f"[continuity] test ({test[0]}-{test[-1]}), NOAA-20 x k vs real S-NPP:\n"
+              + (val.to_string(index=False) if len(val) else "none"), flush=True)
+        print("[continuity] fire power ratio S-NPP / NOAA-20:\n" + (frp.to_string(index=False) if len(frp) else "none"), flush=True)
     return report

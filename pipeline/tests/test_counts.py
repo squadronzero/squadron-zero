@@ -62,3 +62,39 @@ def test_counts_removes_the_2012_jump(tmp_path):
     assert {"daily.parquet", "factors.csv", "validation_holdout.csv", "step_2012.csv"} <= {p.name for p in out.iterdir()}
     daily = pd.read_parquet(out / "daily.parquet")
     assert {"global", "florida"} <= set(daily["region"]) and {"MODIS", "S-NPP"} <= set(daily["group"])
+
+
+def test_continuity_ties_noaa20_to_snpp_and_fills_the_gap(tmp_path):
+    """NOAA-20 sees 90% of the fires S-NPP sees (k about 1.11). S-NPP is silent for one
+    month in 2025: NOAA-20 x k must stand in for it."""
+    from shift.counts import run_continuity
+    s = _settings(tmp_path)
+    s.raw["continuity"].update({"fit_years": [2019, 2023], "test_years": [2024, 2025]})
+    rng = np.random.default_rng(2)
+    gap = (pd.Timestamp("2025-05-01"), pd.Timestamp("2025-05-31"))
+    rows = []
+    for day in pd.date_range("2019-01-01", "2025-12-31"):
+        for f in range(10):
+            lat, lon = 26.02 + 0.1 * f, -81.02 - 0.1 * (day.dayofyear % 20)
+            if not gap[0] <= day <= gap[1]:
+                rows.append((day, lat, lon, "S-NPP", "VIIRS"))
+            if rng.random() < 0.9:
+                rows.append((day, lat, lon, "NOAA-20", "VIIRS"))
+    det = pd.DataFrame(rows, columns=["acq_date", "lat", "lon", "satellite", "sensor_family"])
+    det["frp_mw"], det["daynight"], det["confidence_class"], det["type_known"] = 10.0, "D", "nominal", True
+    write_celldays(to_celldays(det, 0.05), s.celldays_dir)
+    # coverage table as qc would write it
+    from shift.qc import coverage, daily_totals
+    cov = coverage(daily_totals(s), 31, 0.25)
+    cp = s.path(s["coverage"]["path"]); cp.parent.mkdir(parents=True, exist_ok=True)
+    cov.to_parquet(cp, index=False)
+
+    run_counts(s)
+    rep = run_continuity(s)
+    k = rep["k_cells_per_region"]["florida"]
+    assert 1.07 < k < 1.15
+    test = {r["region"]: r for r in rep["test"]}["florida"]
+    assert abs(test["total_error_pct"]) < 3
+    frp = {r["region"]: r for r in rep["frp"]}["florida"]
+    assert 1.07 < frp["k_frp"] < 1.15 and abs(frp["test_total_frp_error_pct"]) < 3
+    assert rep["gapfill"]["days"] == 31 and rep["gapfill"]["first"] == "2025-05-01"

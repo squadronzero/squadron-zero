@@ -75,6 +75,7 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 | calibrate | L2 overlap 2012-2021, satellite outage days left out | v1 OLS model + validation at 4 scales | Done (v1 method) |
 | quickstart | `samples/florida_sample.zip` | the whole method in seconds, in a temporary folder | Done |
 | counts | L2 global | detection-count harmonisation: active cell-days, MODIS scaled to VIIRS per region and month, 2012 jump measured | Phase 2, fix 1 |
+| continuity | counts daily series | NOAA-20 tied to S-NPP per region and month (cells and fire power), tested on 2024-2025, S-NPP outage days filled | Phase 2, fix 2 |
 | harmonise | L2 + model | L3 harmonised record | Phase 2 |
 | validate | L3 + holdout years | metrics per region | Phase 2 |
 | calendar | L3 | climatology, anomalies, critical periods | Phase 3 |
