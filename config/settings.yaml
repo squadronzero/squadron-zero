@@ -73,6 +73,9 @@ calibration:
   # Datasets the v1 calibration runs on. Global calibration is done per region in
   # Phase 2 (loading every global year at once would not fit in Colab memory).
   run_on_datasets: [florida, test]
+  # Drop days when any satellite in the model was not fully working (qc coverage table).
+  # Otherwise a Terra outage makes "MODIS" (Terra + Aqua) look weak against VIIRS.
+  exclude_gap_days: true
   # Validation is reported at several scales. The calendar works at area-month
   # scale, so that is the headline number; cell-day is reported for honesty.
   validation_scales:
@@ -122,6 +125,10 @@ qc:
   step_checks:
     - {family: MODIS, at: "2018-01-01", years_each_side: 3}
     - {family: MODIS, at: "2023-01-01", years_each_side: 3}
+
+coverage:
+  # Daily satellite coverage from the qc stage (global record), shared by every dataset.
+  path: data/processed/global/qc/daily_coverage.parquet
 
 checks:
   # Cross-check: the Florida form download vs the Florida part of the global yearly files.

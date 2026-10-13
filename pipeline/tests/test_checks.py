@@ -88,3 +88,20 @@ def test_crosscheck_identical_routes_pass(tmp_path):
     rep = run_crosscheck(g)
     assert rep["verdict"] == "PASS"
     assert rep["totals"]["in_both"] == 2 and rep["totals"]["same_count_pct"] == 100
+
+
+def test_bad_days_only_counts_shared_period(tmp_path):
+    from shift.coverage import bad_days
+    s = make_settings(tmp_path)
+    cov = pd.concat([
+        pd.DataFrame({"acq_date": pd.date_range("2010-01-01", "2010-01-10"), "satellite": "Aqua", "status": "ok"}),
+        pd.DataFrame({"acq_date": pd.date_range("2010-01-05", "2010-01-10"), "satellite": "S-NPP",
+                      "status": ["ok", "none", "ok", "low", "ok", "ok"]}),
+    ])
+    p = s.path(s["coverage"]["path"])
+    p.parent.mkdir(parents=True)
+    cov.to_parquet(p)
+    bad = bad_days(s, ["Aqua", "S-NPP"])
+    assert [d.day for d in bad] == [6, 8]       # days 1-4 are before S-NPP existed: not counted
+    (tmp_path / "x").mkdir()
+    assert bad_days(make_settings(tmp_path / "x"), ["Aqua"]) is None   # no table yet

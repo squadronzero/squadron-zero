@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from .aggregate import read_celldays
+from .coverage import bad_days
 from .config import Settings
 
 PAIR_COLUMNS = ["acq_date", "cell_lat", "cell_lon", "frp_modis", "count_modis", "frp_viirs", "count_viirs"]
@@ -122,6 +123,14 @@ def run_calibrate(settings: Settings) -> dict:
                 f"global calibration is per region (Phase 2). Allowed: {allowed}"}
     cd = read_celldays(settings)
     pairs = build_pairs(cd, cfg["modis_satellites"], cfg["viirs_satellites"])
+    gap_note = "no coverage table (run qc on global); outage days not excluded"
+    if cfg.get("exclude_gap_days", True):
+        bad = bad_days(settings, list(cfg["modis_satellites"]) + list(cfg["viirs_satellites"]))
+        if bad is not None:
+            dates = pd.to_datetime(pairs["acq_date"]).dt.normalize()
+            drop = dates.isin(bad)
+            gap_note = {"days_excluded": int(len(bad)), "pairs_excluded": int(drop.sum())}
+            pairs = pairs[~drop].reset_index(drop=True)
     train = split_window(pairs, periods["calibration_start"], periods["calibration_end"])
     test = split_window(pairs, periods["holdout_start"], periods["holdout_end"])
 
@@ -135,7 +144,7 @@ def run_calibrate(settings: Settings) -> dict:
     pairs.to_parquet(out / "pairs.parquet", index=False)
 
     report = {"stage": "calibrate", "model": model, "pairs_total": len(pairs),
-              "pairs_train": len(train), "pairs_holdout": len(test)}
+              "pairs_train": len(train), "pairs_holdout": len(test), "outage_days": gap_note}
     if len(test) >= 2:
         val = validate(test, model, cfg["validation_scales"])
         val.to_csv(out / "validation_holdout.csv", index=False)
