@@ -6,12 +6,16 @@
 
 Uses samples/florida_sample.zip (real NASA FIRMS archive detections for Florida,
 2020 and 2023 only, about 57,000 rows). 2020 fits the v1-style calibration;
-2023 tests it. No downloads, no Google Drive, nothing outside the repo.
+2023 tests it. No downloads and no Google Drive: everything is written to a fresh
+temporary folder, and nothing from the main data folders (coverage table, static-source
+mask) is read, so the result is the same on every machine.
 """
 from __future__ import annotations
 
 import shutil
+import tempfile
 import time
+from pathlib import Path
 
 from .aggregate import run_aggregate
 from .calibrate import run_calibrate
@@ -27,8 +31,12 @@ def main() -> None:
     # The sample covers two years only: fit on 2020, test on 2023.
     settings.raw["periods"].update({"calibration_start": "2020-01-01", "calibration_end": "2020-12-31",
                                     "holdout_start": "2023-01-01", "holdout_end": "2023-12-31"})
+    work = Path(tempfile.mkdtemp(prefix="shift_quickstart_"))
+    settings.raw["inputs"]["raw_dir"] = str(work / "raw")
+    settings.raw["outputs"]["processed_dir"] = str(work / "processed")
+    settings.raw["static_mask"]["enabled"] = False      # self-contained: no global mask
+    settings.raw["calibration"]["exclude_gap_days"] = False  # no global coverage table
     raw = settings.raw_dir
-    shutil.rmtree(raw, ignore_errors=True)
     raw.mkdir(parents=True)
     shutil.copy(SAMPLE, raw / SAMPLE.name)
     print(f"SHIFT quickstart: {SAMPLE.name} -> {raw}")
