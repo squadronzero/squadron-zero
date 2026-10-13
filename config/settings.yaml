@@ -38,6 +38,22 @@ regions:
     florida: config/regions/florida.geojson
     sample: config/regions/florida.geojson   # 2-minute demo (python -m shift.quickstart)
 
+  # Phase 2 test regions (D18): one per contrasting fire regime, plus the cloudy and
+  # volcanic cases D11 asks for and South Asia for local Impact. Boxes are
+  # [west, south, east, north] in degrees. Calibration and validation are reported per
+  # region; the global record is not clipped to them.
+  test:
+    florida:         {bbox: [-87.6, 24.5, -80.0, 31.0],  regime: "subtropical prescribed burning (v1 baseline)"}
+    africa_savanna:  {bbox: [15.0, 4.0, 30.0, 12.0],     regime: "tropical savanna, world's largest burned area"}
+    australia_savanna: {bbox: [129.0, -17.0, 138.0, -11.0], regime: "southern-hemisphere savanna, late dry season fires"}
+    amazon_arc:      {bbox: [-64.0, -13.0, -52.0, -7.0], regime: "tropical deforestation and forest fire"}
+    siberia_boreal:  {bbox: [100.0, 55.0, 130.0, 65.0],  regime: "boreal forest, large summer wildfires"}
+    iberia_med:      {bbox: [-9.5, 36.0, 3.5, 44.0],     regime: "Mediterranean summer wildfire"}
+    punjab_crop:     {bbox: [73.0, 27.0, 80.0, 32.0],    regime: "crop-residue burning (South Asia)"}
+    bangladesh:      {bbox: [88.0, 20.5, 92.7, 26.7],    regime: "small fires under monsoon cloud (local case)"}
+    kalimantan_peat: {bbox: [109.0, -4.0, 118.0, 2.0],   regime: "cloudy tropics, peat fires"}
+    java_volcanic:   {bbox: [105.0, -9.0, 115.0, -6.0],  regime: "active volcanoes next to farmland"}
+
 filters:
   # FIRMS `type` field: 0 = presumed vegetation fire, 1 = active volcano,
   # 2 = other static land source (gas flares, industry), 3 = offshore.

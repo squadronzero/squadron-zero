@@ -46,3 +46,21 @@ def inside(settings, lon, lat) -> np.ndarray | None:
     from shapely import contains_xy
 
     return contains_xy(_load(str(path)), np.asarray(lon, dtype=float), np.asarray(lat, dtype=float))
+
+
+def test_regions(settings) -> dict[str, dict]:
+    """Phase 2 test regions (D18) from settings: name -> {bbox: [w, s, e, n], regime}."""
+    out = {}
+    for name, spec in ((settings.raw.get("regions") or {}).get("test") or {}).items():
+        w, s, e, n = (float(v) for v in spec["bbox"])
+        if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
+            raise ValueError(f"test region {name}: bad bbox {spec['bbox']}")
+        out[name] = {"bbox": [w, s, e, n], "regime": str(spec.get("regime", ""))}
+    return out
+
+
+def in_bbox(bbox, lon, lat) -> np.ndarray:
+    """True where (lon, lat) falls inside bbox [west, south, east, north]."""
+    w, s, e, n = bbox
+    lon, lat = np.asarray(lon, dtype=float), np.asarray(lat, dtype=float)
+    return (lon >= w) & (lon <= e) & (lat >= s) & (lat <= n)

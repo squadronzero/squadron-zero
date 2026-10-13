@@ -186,3 +186,13 @@ def test_full_pipeline_runs_end_to_end(project):
     report = run_calibrate(project)
     # The tiny sample has one MODIS/VIIRS pair, too few to fit, so the stage skips cleanly.
     assert report["pairs_total"] == 1 and "skipped" in report
+
+
+def test_phase2_test_regions_are_valid():
+    from shift.config import load_settings
+    from shift.region import in_bbox, test_regions
+    regions = test_regions(load_settings())
+    assert len(regions) >= 6 and {"florida", "bangladesh", "java_volcanic", "kalimantan_peat"} <= set(regions)
+    # Dhaka is in the Bangladesh box and not in Florida's
+    assert in_bbox(regions["bangladesh"]["bbox"], 90.41, 23.81)
+    assert not in_bbox(regions["florida"]["bbox"], 90.41, 23.81)
