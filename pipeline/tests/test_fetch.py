@@ -48,12 +48,21 @@ def project(tmp_path: Path):
         ],
     }, VIIRS_HEADER)
 
+    # NOAA-20 2020 under the first NOAA-20 prefix. Same cell and day as the S-NPP rows,
+    # so both satellites land in the same VIIRS partition folder.
+    make_zip(server / "viirs-jpss1_2020_all_countries.zip", "viirs-jpss1/2020", {
+        "viirs-jpss1_2020_CountryA.csv": [
+            "27.1260,-81.4360,332,0.4,0.4,2020-03-05,1730,1,VIIRS,n,2,297,5.5,D,0",
+        ],
+    }, VIIRS_HEADER)
+
     cfg = yaml.safe_load(DEFAULT_SETTINGS.read_text())
     cfg["dataset"] = "global"
     cfg["fetch"]["base_url"] = server.as_uri()
     cfg["fetch"]["last_year"] = 2021          # 2021 does not exist on the "server"
     cfg["fetch"]["products"]["MODIS"]["first_year"] = 2020
     cfg["fetch"]["products"]["VIIRS"]["first_year"] = 2020
+    cfg["fetch"]["products"]["VIIRS_NOAA20"]["first_year"] = 2020
     cfg["fetch"]["tmp_dir"] = str(tmp_path / "scratch")
     (tmp_path / "scratch").mkdir()
     settings_path = tmp_path / "settings.yaml"
@@ -62,7 +71,7 @@ def project(tmp_path: Path):
 
 
 def test_fetch_builds_celldays_and_merges_borders(project):
-    report = run_fetch(project)
+    report = run_fetch(project, families=["MODIS", "VIIRS"])
     assert set(report["years"]) == {"MODIS_2020", "VIIRS_2020"}
     assert set(report["missing"]) == {"MODIS_2021", "VIIRS_2021"}
     assert report["years"]["VIIRS_2020"]["url"].endswith("viirs_snpp_2020_all_countries.zip")
@@ -89,7 +98,7 @@ def test_fetch_builds_celldays_and_merges_borders(project):
 
 def test_fetch_resumes_and_skips_done_years(project):
     run_fetch(project, years=[2020], families=["MODIS"])
-    again = run_fetch(project)
+    again = run_fetch(project, families=["MODIS", "VIIRS"])
     assert "MODIS_2020" in again["skipped"]
     assert "VIIRS_2020" in again["years"]
     marker = json.loads((project.processed_dir / "_fetch_done" / "MODIS_2020.json").read_text())
@@ -150,3 +159,32 @@ def test_scan_versions_static_sources_and_fingerprints(project):
     assert build_static_mask(project)["cells"] == 1
     # rerun skips finished years
     assert set(run_scan(project)["skipped"]) == {"MODIS_2020", "VIIRS_2020"}
+
+
+def test_noaa20_shares_viirs_partition_without_overwriting_snpp(project):
+    """D8: NOAA-20 is fetched as its own product into the VIIRS partitions, in its own file."""
+    run_fetch(project, families=["VIIRS"])
+    rep = run_fetch(project, families=["VIIRS_NOAA20"])
+    assert set(rep["years"]) == {"VIIRS_NOAA20_2020"}
+    assert rep["years"]["VIIRS_NOAA20_2020"]["url"].endswith("viirs-jpss1_2020_all_countries.zip")
+    part = project.celldays_dir / "sensor_family=VIIRS/year=2020/month=3"
+    assert sorted(p.name for p in part.iterdir()) == ["part-0.parquet", "part-noaa20.parquet"]
+    cd = read_celldays(project)
+    viirs = cd[cd["sensor_family"] == "VIIRS"].groupby("satellite")["n_detections"].sum().to_dict()
+    assert viirs == {"S-NPP": 2, "NOAA-20": 1}
+
+    # A forced NOAA-20 rerun replaces only the NOAA-20 file; S-NPP is untouched.
+    run_fetch(project, families=["VIIRS_NOAA20"], force=True)
+    cd = read_celldays(project)
+    assert cd[cd["sensor_family"] == "VIIRS"].groupby("satellite")["n_detections"].sum().to_dict() == viirs
+    marker = json.loads((project.processed_dir / "_fetch_done" / "VIIRS_NOAA20_2020.json").read_text())
+    assert marker["family"] == "VIIRS" and marker["file"] == "part-noaa20.parquet"
+
+
+def test_fetch_refuses_wrong_satellite_and_unknown_product(project):
+    # Point the NOAA-20 product at the S-NPP file: the satellite check must refuse it.
+    project.raw["fetch"]["products"]["VIIRS_NOAA20"]["prefixes"] = ["viirs_snpp"]
+    with pytest.raises(ValueError, match="expected satellites"):
+        run_fetch(project, years=[2020], families=["VIIRS_NOAA20"])
+    with pytest.raises(ValueError, match="unknown --family"):
+        run_fetch(project, families=["VIIRS_N20"])

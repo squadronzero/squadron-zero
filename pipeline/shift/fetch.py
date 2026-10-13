@@ -14,7 +14,8 @@ a marker, an interrupted run (Colab disconnect) simply continues where it stoppe
 
     python -m shift.run --stage fetch                     # every missing year, both sensors
     python -m shift.run --stage fetch --years 2020        # one year (test)
-    python -m shift.run --stage fetch --family MODIS      # one sensor
+    python -m shift.run --stage fetch --family MODIS      # one product
+    python -m shift.run --stage fetch --family VIIRS_NOAA20 --years 2020
 """
 from __future__ import annotations
 
@@ -76,7 +77,14 @@ def download(url: str, dest: Path, retries: int = 3) -> dict | None:
     raise RuntimeError(f"download failed after {retries} attempts: {url} ({err})")
 
 
-def process_zip(zip_path: Path, family: str, settings: Settings, work: Path, out_dir: Path) -> tuple[list[str], dict]:
+def product_file(spec: dict) -> str:
+    """File name a fetch product writes inside each partition folder."""
+    tag = spec.get("file_tag")
+    return f"part-{tag}.parquet" if tag else "part-0.parquet"
+
+
+def process_zip(zip_path: Path, family: str, settings: Settings, work: Path, out_dir: Path,
+                satellites: list[str] | None = None, filename: str = "part-0.parquet") -> tuple[list[str], dict]:
     """Turn one yearly world zip into cell-day partitions in out_dir.
 
     Country files are aggregated one by one into partial cell-days on local scratch,
@@ -96,6 +104,10 @@ def process_zip(zip_path: Path, family: str, settings: Settings, work: Path, out
             for frame in adapter.read(path, settings, chunk_rows):
                 if (frame["sensor_family"] != family).any():
                     raise ValueError(f"{member}: expected {family} data")
+                if satellites:
+                    other = set(frame["satellite"].unique()) - set(satellites)
+                    if other:
+                        raise ValueError(f"{member}: expected satellites {satellites}, found {sorted(other)}")
                 counts["rows_read"] += len(frame)
                 kept, rejected = apply_filters(frame, settings)
                 counts.update(rejected)
@@ -113,7 +125,7 @@ def process_zip(zip_path: Path, family: str, settings: Settings, work: Path, out
     for d in sorted(staging.glob("month=*"), key=lambda p: int(p.name.split("=")[1])):
         cd = combine_partials(pd.concat([pd.read_parquet(f) for f in sorted(d.glob("*.parquet"))],
                                         ignore_index=True))
-        written += write_celldays(cd, out_dir)
+        written += write_celldays(cd, out_dir, filename)
         counts["celldays"] += len(cd)
         shutil.rmtree(d)
     return written, dict(counts)
@@ -127,14 +139,19 @@ def run_fetch(settings: Settings, years: list[int] | None = None, families: list
     out_dir = settings.celldays_dir
     scratch_root = Path(cfg["tmp_dir"]) if cfg.get("tmp_dir") else Path(tempfile.gettempdir())
 
+    unknown = set(families or []) - set(cfg["products"])
+    if unknown:
+        raise ValueError(f"unknown --family {sorted(unknown)}; choose from {list(cfg['products'])}")
     report = {"stage": "fetch", "dataset": settings.dataset, "years": {}, "missing": [], "skipped": []}
-    for family, spec in cfg["products"].items():
-        if families and family not in families:
+    for product, spec in cfg["products"].items():
+        if families and product not in families:
             continue
+        family = spec.get("family", product)
+        filename = product_file(spec)
         for year in range(int(spec["first_year"]), int(cfg["last_year"]) + 1):
             if years and year not in years:
                 continue
-            key = f"{family}_{year}"
+            key = f"{product}_{year}"
             marker = done_dir / f"{key}.json"
             if marker.exists() and not force:
                 report["skipped"].append(key)
@@ -154,12 +171,15 @@ def run_fetch(settings: Settings, years: list[int] | None = None, families: list
                     print(f"[fetch] {key}: no file found (tried {spec['prefixes']})", flush=True)
                     continue
                 size_mb = round(zip_path.stat().st_size / 1e6, 1)
-                if marker.exists():  # forced rerun: remove this year's old partitions first
-                    for rel in json.loads(marker.read_text()).get("partitions", []):
-                        shutil.rmtree(out_dir / rel, ignore_errors=True)
+                if marker.exists():  # forced rerun: remove only this product's old files
+                    old = json.loads(marker.read_text())
+                    for rel in old.get("partitions", []):
+                        (out_dir / rel / old.get("file", "part-0.parquet")).unlink(missing_ok=True)
                     marker.unlink()
-                partitions, counts = process_zip(zip_path, family, settings, work, out_dir)
-                info = {"url": used, "zip_mb": size_mb, "sha256": fp["sha256"], "bytes": fp["bytes"],
+                partitions, counts = process_zip(zip_path, family, settings, work, out_dir,
+                                                 spec.get("satellites"), filename)
+                info = {"url": used, "family": family, "file": filename, "zip_mb": size_mb,
+                        "sha256": fp["sha256"], "bytes": fp["bytes"],
                         "last_modified": fp["last_modified"], **counts, "partitions": partitions,
                         "seconds": round(time.time() - t0, 1)}
                 marker.write_text(json.dumps(info, indent=1))

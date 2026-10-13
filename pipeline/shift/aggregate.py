@@ -71,8 +71,11 @@ def combine_partials(parts: pd.DataFrame) -> pd.DataFrame:
     return conform(g, L2_COLUMNS)
 
 
-def write_celldays(cd: pd.DataFrame, out_dir: Path) -> list[str]:
-    """Write cell-days as one Parquet file per sensor family, year and month. Returns partition paths."""
+def write_celldays(cd: pd.DataFrame, out_dir: Path, filename: str = "part-0.parquet") -> list[str]:
+    """Write cell-days as one Parquet file per sensor family, year and month. Returns partition paths.
+
+    `filename` lets a second product of the same family (VIIRS NOAA-20 next to S-NPP) keep
+    its own file inside the shared partition folder."""
     written = []
     if cd.empty:
         return written
@@ -82,7 +85,7 @@ def write_celldays(cd: pd.DataFrame, out_dir: Path) -> list[str]:
         rel = f"sensor_family={family}/year={int(year)}/month={int(month)}"
         target = out_dir / rel
         target.mkdir(parents=True, exist_ok=True)
-        part.drop(columns=PARTITIONS).to_parquet(target / "part-0.parquet", index=False)
+        part.drop(columns=PARTITIONS).to_parquet(target / filename, index=False)
         written.append(rel)
     return written
 

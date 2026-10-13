@@ -91,6 +91,9 @@ def yearly_table(cov: pd.DataFrame) -> pd.DataFrame:
     modis = y[[s for s in y.columns if s in MODIS_SATS]].sum(axis=1)
     if "S-NPP" in y.columns:
         out["viirs_to_modis"] = (y["S-NPP"] / modis.where(modis > 0)).where(y["S-NPP"] > 0).round(3)
+    if {"S-NPP", "NOAA-20"} <= set(y.columns):
+        # Two copies of the same VIIRS instrument: the ratio should sit near a steady value.
+        out["noaa20_to_snpp"] = (y["NOAA-20"] / y["S-NPP"].where(y["S-NPP"] > 0)).where(y["NOAA-20"] > 0).round(3)
     return out.reset_index()
 
 

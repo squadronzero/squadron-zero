@@ -20,6 +20,7 @@ processed/<dataset>/_scan_done/.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import tempfile
 import time
@@ -74,11 +75,12 @@ def build_static_mask(settings: Settings) -> dict:
     """Combine the per-year static-source files into one mask of grid cells."""
     cfg = settings["static_mask"]
     src = static_dir(settings)
-    families = list(settings["fetch"]["products"])
-    files = sorted(f for fam in families for f in src.glob(f"{fam}_*.parquet")) if src.exists() else []
+    families = [k for k, v in settings["fetch"]["products"].items() if v.get("scan", True)]
+    pat = re.compile(r"^(%s)_(\d{4})$" % "|".join(map(re.escape, families)))
+    files = sorted(f for f in src.glob("*.parquet") if pat.match(f.stem)) if src.exists() else []
     if not files:
         return {"cells": 0, "note": "no static-source files yet; run the scan stage"}
-    allp = pd.concat([pd.read_parquet(f).assign(year=int(f.stem.split("_")[1])) for f in files], ignore_index=True)
+    allp = pd.concat([pd.read_parquet(f).assign(year=int(f.stem.rsplit("_", 1)[1])) for f in files], ignore_index=True)
     per_cell = allp.groupby("cell_id").agg(
         n_years=("year", "nunique"),
         n_detections=("n_detections", "sum"),
@@ -107,7 +109,7 @@ def run_scan(settings: Settings, years: list[int] | None = None, families: list[
 
     report = {"stage": "scan", "dataset": settings.dataset, "years": {}, "missing": [], "skipped": []}
     for family, spec in cfg["products"].items():
-        if families and family not in families:
+        if (families and family not in families) or not spec.get("scan", True):
             continue
         for year in range(int(spec["first_year"]), int(cfg["last_year"]) + 1):
             if years and year not in years:

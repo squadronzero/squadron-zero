@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--dataset", help="dataset folder to use: global or florida (default: from settings)")
     ap.add_argument("--stage", choices=list(STAGES) + list(EXTRA_STAGES), help="run only this stage")
     ap.add_argument("--years", type=int, nargs="+", help="fetch/scan only: years to download")
-    ap.add_argument("--family", choices=["MODIS", "VIIRS"], nargs="+", help="fetch/scan only: sensor families")
+    ap.add_argument("--family", nargs="+", help="fetch/scan only: products from fetch.products (MODIS, VIIRS, VIIRS_NOAA20)")
     ap.add_argument("--force", action="store_true", help="fetch/scan only: redo years already done")
     args = ap.parse_args(argv)
 

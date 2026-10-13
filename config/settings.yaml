@@ -98,6 +98,17 @@ fetch:
     VIIRS:
       prefixes: [viirs-snpp, viirs_snpp, suomi-viirs]
       first_year: 2012
+    # VIIRS on NOAA-20 (JPSS-1), launched Nov 2017 (D8, 13 Oct). NASA stops delivering
+    # Suomi NPP data on 1 Nov 2026, so NOAA-20 is the VIIRS that carries the record forward.
+    # Same sensor family as S-NPP, so it shares the VIIRS partitions; file_tag gives it its
+    # own file in each partition so the two satellites never overwrite each other.
+    VIIRS_NOAA20:
+      family: VIIRS
+      satellites: [NOAA-20]
+      file_tag: noaa20
+      prefixes: [viirs-jpss1, viirs_jpss1, viirs-noaa20, viirs_noaa20, noaa-20]
+      first_year: 2018
+      scan: false       # the static-source mask stays built from the MODIS and S-NPP files
   # Last full year taken from the yearly files. Anything later comes from FIRMS form
   # downloads placed in data/raw/global/ (one request covering 1 Jan to today).
   last_year: 2025
