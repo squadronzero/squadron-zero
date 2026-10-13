@@ -116,6 +116,30 @@ def step_check(cov: pd.DataFrame, family: str, at: str, years_each_side: int) ->
             "change_pct": round(float(change), 1), "months_before": int(len(rb)), "months_after": int(len(ra))}
 
 
+def mask_overlap(settings: Settings) -> pd.DataFrame | None:
+    """Share of kept fire detections per sensor family and year that sit inside cells of
+    the static-source mask. These are real (labelled vegetation) fires near gas flares,
+    industry or volcanoes: what the mask would remove if applied to the whole record."""
+    from .static_mask import masked_cells
+    cells = masked_cells(settings)
+    root = settings.celldays_dir
+    if cells is None or not root.exists():
+        return None
+    rows = []
+    for part in sorted(root.glob("sensor_family=*/year=*/month=*")):
+        family = part.parent.parent.name.split("=", 1)[1]
+        year = int(part.parent.name.split("=", 1)[1])
+        d = pd.read_parquet(part, columns=["cell_id", "n_detections", "frp_sum_mw"])
+        inm = d["cell_id"].isin(cells)
+        rows.append({"family": family, "year": year, "detections": int(d["n_detections"].sum()),
+                     "in_mask": int(d.loc[inm, "n_detections"].sum()),
+                     "frp": float(d["frp_sum_mw"].sum()), "frp_in_mask": float(d.loc[inm, "frp_sum_mw"].sum())})
+    t = pd.DataFrame(rows).groupby(["family", "year"], as_index=False).sum()
+    t["in_mask_pct"] = (100 * t["in_mask"] / t["detections"]).round(2)
+    t["frp_in_mask_pct"] = (100 * t["frp_in_mask"] / t["frp"]).round(2)
+    return t
+
+
 def run_qc(settings: Settings) -> dict:
     cfg = settings["qc"]
     daily = daily_totals(settings)
@@ -136,6 +160,10 @@ def run_qc(settings: Settings) -> dict:
     years.to_csv(out / "yearly.csv", index=False)
     monthly.to_csv(out / "monthly.csv", index=False)
 
+    overlap = mask_overlap(settings)
+    if overlap is not None:
+        overlap.to_csv(out / "mask_overlap.csv", index=False)
+
     status_counts = cov.groupby(["satellite", "status"]).size().unstack(fill_value=0)
     report = {
         "stage": "qc", "dataset": settings.dataset,
@@ -143,6 +171,9 @@ def run_qc(settings: Settings) -> dict:
         "days_by_status": {s: {k: int(v) for k, v in r.items()} for s, r in status_counts.iterrows()},
         "longest_gaps": gaps.head(15).to_dict("records"),
         "step_checks": steps,
+        "real_fires_in_mask_pct": (None if overlap is None else
+                                   {f: round(100 * g["in_mask"].sum() / g["detections"].sum(), 2)
+                                    for f, g in overlap.groupby("family")}),
         "outputs": [str(p.relative_to(settings.processed_dir)) for p in sorted(out.iterdir())],
     }
     with pd.option_context("display.width", 200, "display.max_columns", 20):

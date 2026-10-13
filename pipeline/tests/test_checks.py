@@ -70,6 +70,12 @@ def test_qc_finds_a_silent_stretch(tmp_path):
     assert gap["days_none"] == 6
     assert rep["days_by_status"]["Aqua"].get("none", 0) == 0
     assert (s.processed_dir / "qc" / "daily_coverage.parquet").exists()
+    # with a mask covering the Aqua cell, every Aqua detection counts as "in mask"
+    from shift.grid import cell_index
+    mp = s.path(s["static_mask"]["path"]); mp.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"cell_id": [int(cell_index(pd.Series([0.0]), pd.Series([20.0]), 0.05)[0])]}).to_parquet(mp)
+    rep2 = run_qc(s)
+    assert rep2["real_fires_in_mask_pct"]["MODIS"] == 100.0 and rep2["real_fires_in_mask_pct"]["VIIRS"] == 0.0
 
 
 def test_crosscheck_identical_routes_pass(tmp_path):

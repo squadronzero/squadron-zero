@@ -38,7 +38,7 @@ STAGES = {
 EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck": run_crosscheck}
 # What to print at the end of each stage (the full report is always saved as JSON).
 SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
-           "qc": ["date_range", "days_by_status", "step_checks"],
+           "qc": ["date_range", "days_by_status", "step_checks", "real_fires_in_mask_pct"],
            "crosscheck": ["verdict", "totals"]}
 
 
