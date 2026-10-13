@@ -75,7 +75,7 @@ def test_qc_finds_a_silent_stretch(tmp_path):
     mp = s.path(s["static_mask"]["path"]); mp.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({"cell_id": [int(cell_index(pd.Series([0.0]), pd.Series([20.0]), 0.05)[0])]}).to_parquet(mp)
     rep2 = run_qc(s)
-    assert rep2["real_fires_in_mask_pct"]["MODIS"] == 100.0 and rep2["real_fires_in_mask_pct"]["VIIRS"] == 0.0
+    assert rep2["real_fires_in_mask_pct"] == {"Aqua": 100.0, "S-NPP": 0.0}   # per satellite
 
 
 def test_crosscheck_identical_routes_pass(tmp_path):
@@ -91,6 +91,9 @@ def test_crosscheck_identical_routes_pass(tmp_path):
     write_celldays(cd, g.celldays_dir)
     f = load_settings(tmp_path / "settings.yaml", root=tmp_path, dataset="florida")
     write_celldays(cd[cd["cell_lat"] < 31], f.celldays_dir)
+    # The global record also has NOAA-20 (D8); Florida does not. It must not count as a mismatch.
+    n20 = _celldays([("2015-03-01", 28.5, -81.5, "NOAA-20", "VIIRS", 8.0)])
+    write_celldays(n20, g.celldays_dir, "part-noaa20.parquet")
     rep = run_crosscheck(g)
     assert rep["verdict"] == "PASS"
     assert rep["totals"]["in_both"] == 2 and rep["totals"]["same_count_pct"] == 100

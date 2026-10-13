@@ -65,18 +65,19 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 
 | Stage | Input | Output | Status |
 | --- | --- | --- | --- |
-| fetch | FIRMS yearly world zips | L2 cell-days (global, no raw kept) | Done |
+| fetch | FIRMS yearly world zips: MODIS 2002+, VIIRS S-NPP 2012+, VIIRS NOAA-20 2018+ | L2 cell-days (global, no raw kept) | Done |
 | scan | FIRMS yearly world zips (re-read) | version labels, non-fire source cells + static-source mask, file fingerprints | Done |
 | qc | L2 | daily coverage, data gaps, yearly ratios, version step check | Done |
 | crosscheck | L2 global + L2 florida | download-route agreement, PASS/CHECK | Done |
 | ingest | FIRMS CSV (archive + NRT) | L1 detections | Done |
 | aggregate | L1 | L2 cell-days, 0.05 deg | Done |
-| calibrate | L2 overlap 2012-2021 | v1 OLS model + validation at 4 scales | Done (v1 method) |
+| calibrate | L2 overlap 2012-2021, satellite outage days left out | v1 OLS model + validation at 4 scales | Done (v1 method) |
+| quickstart | `samples/florida_sample.zip` | the whole method in seconds, in a temporary folder | Done |
 | harmonise | L2 + model | L3 harmonised record | Phase 2 |
 | validate | L3 + holdout years | metrics per region | Phase 2 |
 | calendar | L3 | climatology, anomalies, critical periods | Phase 3 |
 
-Each stage writes `data/processed/report_<stage>.json` with row counts and rejection reasons, so every number in the app can be traced back.
+Each stage writes `data/processed/<dataset>/report_<stage>.json` with row counts and rejection reasons, so every number in the app can be traced back.
 
 ## NASA data sources used
 
@@ -84,6 +85,17 @@ Each stage writes `data/processed/report_<stage>.json` with row counts and rejec
 | --- | --- | --- |
 | NASA FIRMS MODIS Collection 6.1 active fires (Terra and Aqua, 1 km), https://firms.modaps.eosdis.nasa.gov/ | The long record, 2000 onwards | Yearly world archive files 2002-2025 plus a form download for 2026; cleaned, gridded to 0.05 deg cell-days |
 | NASA FIRMS VIIRS 375 m active fires (Suomi NPP), https://firms.modaps.eosdis.nasa.gov/ | The reference sensor the MODIS record is calibrated to, 2012 onwards | Same route as MODIS; paired with MODIS on the same cell and day to fit and test the calibration |
+| NASA FIRMS VIIRS 375 m active fires (NOAA-20), https://firms.modaps.eosdis.nasa.gov/ | Continuity: NASA stops delivering Suomi NPP data on 1 Nov 2026; NOAA-20 carries the same instrument (2018 onwards) | Same route; compared with S-NPP over 2018-2026 (yearly detection ratio 0.97-1.07) |
+
+Dataset citations (as requested by NASA FIRMS):
+
+- MODIS Collection 6 Hotspot / Active Fire Detections MCD14ML distributed from NASA FIRMS. https://doi.org/10.5067/FIRMS/MODIS/MCD14ML
+- MODIS Collection 61 NRT Hotspot / Active Fire Detections MCD14DL distributed from NASA FIRMS. https://doi.org/10.5067/FIRMS/MODIS/MCD14DL.NRT.0061
+- NRT VIIRS 375 m Active Fire product VNP14IMGT distributed from NASA FIRMS. https://doi.org/10.5067/FIRMS/VIIRS/VNP14IMGT_NRT.002
+- NRT VIIRS 375 m Active Fire product VJ114IMGTDL_NRT distributed from NASA FIRMS. https://doi.org/10.5067/FIRMS/VIIRS/VJ114IMGT_NRT.002
+
+We acknowledge the use of data from NASA's Fire Information for Resource Management System
+(FIRMS, https://www.earthdata.nasa.gov/firms), part of NASA's Earth Science Data and Information System (ESDIS).
 
 Other data: Florida state outline (`config/regions/florida.geojson`), a public-domain US state boundary.
 
@@ -91,6 +103,13 @@ Other data: Florida state outline (`config/regions/florida.geojson`), a public-d
 
 Python, pandas, NumPy, PyArrow, PyYAML, Shapely, pytest; Google Colab and Google Drive;
 GitHub Actions. MODIS C6.1 and VIIRS 375 m active-fire user guides (NASA FIRMS).
+
+- Giglio, L., Schroeder, W., Justice, C. O. (2016). The collection 6 MODIS active fire detection
+  algorithm and fire products. Remote Sensing of Environment, 178, 31-41.
+- Schroeder, W., Oliva, P., Giglio, L., Csiszar, I. A. (2014). The New VIIRS 375 m active fire
+  detection data product: Algorithm description and initial assessment. Remote Sensing of
+  Environment, 143, 85-96.
+- SHIFT v1 Florida prototype (Team Squadron Zero): https://github.com/nasifnaser06-cyber/Project_S.H.I.F.T
 
 ## Use of AI
 

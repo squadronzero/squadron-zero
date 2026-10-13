@@ -51,3 +51,14 @@ The project is intended to characterize observed and derived patterns of burning
 
 Where derived quantities are produced, their assumptions, uncertainty, and limitations will be explicitly documented.
 
+### Sensors (version 0.0)
+
+| Sensor | Satellites | Record | Role |
+| --- | --- | --- | --- |
+| MODIS Collection 6.1, 1 km | Terra (2000+), Aqua (2002+) | to present; both near end of mission | The long historical record that is harmonised |
+| VIIRS 375 m | Suomi NPP | 2012 to 2026; NASA stops delivering its data on 1 Nov 2026 | Calibration reference |
+| VIIRS 375 m | NOAA-20 | 2018 to present | Continuity reference after Suomi NPP (D8); measured against Suomi NPP over 2018-2026 |
+
+The 2012-2026 overlap of MODIS and VIIRS is the evidence base: calibration is fitted on
+2012-2021 and tested on 2022-2025 and 2026, years the model never sees.
+

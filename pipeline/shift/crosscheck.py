@@ -49,6 +49,9 @@ def run_crosscheck(settings: Settings) -> dict:
     f = _read(ref.celldays_dir, years, region.bounds)
     if f.empty:
         return {"stage": "crosscheck", "note": f"no cell-days in the {cfg['reference_dataset']} dataset"}
+    # Compare only satellites the reference has. The global record also holds VIIRS NOAA-20
+    # (D8), which the Florida download does not, and would otherwise look like extra data.
+    g = g[g["satellite"].isin(set(f["satellite"].unique()))]
     g = g[contains_xy(inner, g["cell_lon"].to_numpy(float), g["cell_lat"].to_numpy(float))]
     f = f[contains_xy(inner, f["cell_lon"].to_numpy(float), f["cell_lat"].to_numpy(float))]
 

@@ -105,12 +105,22 @@ Run after the global fetch. None of them change the cell-day record.
 | Stage | What it does | Output |
 | --- | --- | --- |
 | `scan` | Re-reads each yearly file once: data version labels per year, cells FIRMS labels as non-fire heat sources (volcano, gas flare/industry, offshore), file fingerprints | `processed/global/_scan_done/`, `processed/global/static_sources/` (incl. `static_cells.parquet`, the static-source mask) |
-| `qc` | Data health: detections per satellite per day, silent or low days, gap runs, yearly ratios, before/after check for the MODIS version change in 2023 | `processed/global/qc/` (`daily_coverage.parquet`, `gaps.csv`, `yearly.csv`, `monthly.csv`) |
+| `qc` | Data health: detections per satellite per day, silent or low days, gap runs, yearly ratios (Terra:Aqua, VIIRS:MODIS, NOAA-20:S-NPP), before/after checks for the MODIS processing changes in 2018 and 2023, share of real fires inside the static-source mask per satellite | `processed/global/qc/` (`daily_coverage.parquet`, `gaps.csv`, `yearly.csv`, `monthly.csv`, `mask_overlap.csv`) |
 | `crosscheck` | Compares the Florida form download with the Florida part of the global yearly files, cell-day by cell-day | `processed/global/qc/crosscheck_florida.csv`, verdict PASS or CHECK |
 
 Once `static_cells.parquet` exists, rerun `--dataset global` and `--dataset florida`: near-real-time detections (which carry no fire-type field) that fall in known non-fire cells are then dropped and counted as `static_source_masked`.
 
-## 6. If something goes wrong
+## 6. Two-minute demo
+
+```python
+%cd /content/squadron-zero/pipeline
+!python -m shift.quickstart
+```
+
+Runs the whole method on the small sample in the repo and writes only to a temporary folder,
+never to Drive.
+
+## 7. If something goes wrong
 
 | Message | Cause | Fix |
 | --- | --- | --- |

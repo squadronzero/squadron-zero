@@ -2,7 +2,7 @@
 
 Version 0.0 · Squadron Zero
 
-This document fixes the shape of every dataset the SHIFT pipeline produces. The website, the API and every analysis read only these formats. When new source data arrives (for example the official release on 13 Nov 2026), an **adapter** converts it into Level 1. Nothing downstream of Level 1 changes.
+This document fixes the shape of every dataset the SHIFT pipeline produces. The website, the API and every analysis read only these formats. When new source data arrives (for example the datasets NASA names in the full challenge statement on 28 Oct 2026), an **adapter** converts it into Level 1. Nothing downstream of Level 1 changes.
 
 ```
 raw files (any format)  ->  adapter  ->  L1 detections  ->  L2 cell-days  ->  L3 harmonised record  ->  API  ->  website
@@ -55,6 +55,14 @@ Rules:
 One row per grid cell, per day, per satellite, where at least one detection occurred. Cells with no detection are not stored (the grid is sparse).
 
 Storage: Parquet, `data/processed/<dataset>/celldays/sensor_family=<MODIS|VIIRS>/year=<YYYY>/month=<M>/`
+
+Each partition folder can hold more than one file: `part-0.parquet` (MODIS, VIIRS S-NPP, and
+anything built by the aggregate stage) and `part-noaa20.parquet` (VIIRS NOAA-20 from the fetch
+stage, D8). Always read the whole folder.
+
+**Never add up the VIIRS family without choosing satellites.** From 2018 the VIIRS family holds
+two satellites (S-NPP and NOAA-20) seeing the same fires, so a family total counts most fires
+twice. Filter on `satellite` first.
 
 | Field | Type | Description |
 | --- | --- | --- |

@@ -120,9 +120,10 @@ def step_check(cov: pd.DataFrame, family: str, at: str, years_each_side: int) ->
 
 
 def mask_overlap(settings: Settings) -> pd.DataFrame | None:
-    """Share of kept fire detections per sensor family and year that sit inside cells of
-    the static-source mask. These are real (labelled vegetation) fires near gas flares,
-    industry or volcanoes: what the mask would remove if applied to the whole record."""
+    """Share of kept fire detections per satellite and year that sit inside cells of the
+    static-source mask. These are real (labelled vegetation) fires near gas flares,
+    industry or volcanoes: what the mask would remove if applied to the whole record.
+    Reported per satellite, because the VIIRS family holds two satellites from 2018."""
     from .static_mask import masked_cells
     cells = masked_cells(settings)
     root = settings.celldays_dir
@@ -132,12 +133,15 @@ def mask_overlap(settings: Settings) -> pd.DataFrame | None:
     for part in sorted(root.glob("sensor_family=*/year=*/month=*")):
         family = part.parent.parent.name.split("=", 1)[1]
         year = int(part.parent.name.split("=", 1)[1])
-        d = pd.read_parquet(part, columns=["cell_id", "n_detections", "frp_sum_mw"])
-        inm = d["cell_id"].isin(cells)
-        rows.append({"family": family, "year": year, "detections": int(d["n_detections"].sum()),
-                     "in_mask": int(d.loc[inm, "n_detections"].sum()),
-                     "frp": float(d["frp_sum_mw"].sum()), "frp_in_mask": float(d.loc[inm, "frp_sum_mw"].sum())})
-    t = pd.DataFrame(rows).groupby(["family", "year"], as_index=False).sum()
+        d = pd.read_parquet(part, columns=["cell_id", "satellite", "n_detections", "frp_sum_mw"])
+        d["in_mask"] = d["n_detections"].where(d["cell_id"].isin(cells), 0)
+        d["frp_in_mask"] = d["frp_sum_mw"].where(d["cell_id"].isin(cells), 0.0)
+        g = d.groupby("satellite", observed=True)[["n_detections", "in_mask", "frp_sum_mw", "frp_in_mask"]].sum()
+        for sat, r in g.iterrows():
+            rows.append({"family": family, "satellite": sat, "year": year,
+                         "detections": int(r["n_detections"]), "in_mask": int(r["in_mask"]),
+                         "frp": float(r["frp_sum_mw"]), "frp_in_mask": float(r["frp_in_mask"])})
+    t = pd.DataFrame(rows).groupby(["family", "satellite", "year"], as_index=False).sum()
     t["in_mask_pct"] = (100 * t["in_mask"] / t["detections"]).round(2)
     t["frp_in_mask_pct"] = (100 * t["frp_in_mask"] / t["frp"]).round(2)
     return t
@@ -176,7 +180,7 @@ def run_qc(settings: Settings) -> dict:
         "step_checks": steps,
         "real_fires_in_mask_pct": (None if overlap is None else
                                    {f: round(100 * g["in_mask"].sum() / g["detections"].sum(), 2)
-                                    for f, g in overlap.groupby("family")}),
+                                    for f, g in overlap.groupby("satellite")}),
         "outputs": [str(p.relative_to(settings.processed_dir)) for p in sorted(out.iterdir())],
     }
     with pd.option_context("display.width", 200, "display.max_columns", 20):
