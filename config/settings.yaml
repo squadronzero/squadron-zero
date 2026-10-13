@@ -71,6 +71,13 @@ confidence_mapping:
   modis_low_below: 30
   modis_high_from: 80
 
+record:
+  # D20 (decided 14 Oct): Aqua data start in July 2002, and merged MODIS sees about 2.7x as
+  # many fire cells as Terra alone. So the comparable record and every "normal" baseline
+  # start on 1 Jan 2003; Jan-Jun 2002 is kept but flagged "Terra only, not comparable".
+  comparable_start: "2003-01-01"
+  terra_only_until: "2002-07-03"   # FIRMS Aqua fire data begin 4 Jul 2002
+
 periods:
   modis_start: "2000-11-01"
   viirs_start: "2012-01-20"
@@ -106,7 +113,10 @@ counts:
   # (0.05 deg cell with >= 1 detection) replace raw detections, then the MODIS record is
   # scaled to VIIRS with a factor per test region and calendar month, fitted on the
   # calibration years and tested on the holdout years.
-  source: MODIS            # Terra + Aqua merged per cell-day
+  # D19 (decided 14 Oct, by the pre-registered selection rule): Terra + Aqua merged per
+  # cell-day until 2019, Aqua alone from 2020 (Terra's orbit drifts from 2020). Each piece
+  # gets its own factor.
+  source_segments: [[MODIS, 2000, 2019], [Aqua, 2020, 2100]]
   reference: S-NPP
   min_cells_per_month: 30  # fewer MODIS active cells than this -> use the region's all-year factor
   exclude_gap_days: true   # leave out days when any of these satellites was not fully working
@@ -146,6 +156,28 @@ selection:
   # leave-one-year-out and backward tests. A candidate is out if its global backward error
   # is beyond +-max_global_backward_error_pct. If several are within tie_margin_points of the
   # best score, the one with the smallest global false trend (drift) wins.
+  rule:
+    max_global_backward_error_pct: 10
+    tie_margin_points: 2
+
+frp:
+  # Phase 2 fix 4 (stage `frp`, after `counts`): how to put MODIS fire power on the VIIRS
+  # scale. Compares the v1 Florida line, a line with intercept per region, a line through
+  # zero, the paired-cell ratio and the ratio of all fire power (per region and month).
+  # Uses the D19 source pieces from `counts.source_segments`.
+  reference: S-NPP
+  v1_equation: [0.316162, 24.701681]   # VIIRS_FRP = a x MODIS_FRP + b (v1, Florida)
+  overlap_years: [2012, 2025]
+  backward_fit_years: [2016, 2025]
+  backward_test_years: [2012, 2015]
+  forward_fit_years: [2012, 2021]
+  forward_test_years: [2022, 2025]
+  min_frp_mw_per_month: 300            # thinner months use the region's all-year ratio
+  exclude_gap_days: true
+  # PRE-REGISTERED RULE (D21), fixed on 14 Oct 2026 before the first run, same as D19:
+  # score = mean category agreement % over the test regions, leave-one-year-out and backward
+  # averaged; out if global backward error beyond +-10%; within 2 points -> smallest global
+  # false trend wins.
   rule:
     max_global_backward_error_pct: 10
     tie_margin_points: 2

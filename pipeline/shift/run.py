@@ -12,6 +12,7 @@
     python -m shift.run --dataset global --stage continuity  # Phase 2 fix 2: tie NOAA-20 to S-NPP (after counts)
     python -m shift.run --dataset global --stage sources     # Phase 2 fix 3: Aqua, Terra or both? (after counts)
     python -m shift.run --dataset global --stage selection   # Phase 2 fix 3b: six fair tests pick the MODIS source (D19)
+    python -m shift.run --dataset global --stage frp         # Phase 2 fix 4: the intercept problem in fire power (D21)
     python -m shift.run --settings path/to/other_settings.yaml
 
 Run from the `pipeline/` folder (or add it to PYTHONPATH).
@@ -28,6 +29,7 @@ from .config import load_settings
 from .counts import run_continuity, run_counts, run_sources
 from .crosscheck import run_crosscheck
 from .fetch import run_fetch
+from .frp import run_frp
 from .ingest import run_ingest, write_report
 from .qc import run_qc
 from .scan import run_scan
@@ -43,7 +45,7 @@ STAGES = {
 # Stages that only run when asked for by name (downloads and checks).
 EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck": run_crosscheck,
                 "counts": run_counts, "continuity": run_continuity, "sources": run_sources,
-                "selection": run_selection}
+                "selection": run_selection, "frp": run_frp}
 # What to print at the end of each stage (the full report is always saved as JSON).
 SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "qc": ["date_range", "days_by_status", "step_checks", "real_fires_in_mask_pct"],
@@ -51,7 +53,8 @@ SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "counts": ["k_per_region", "outage_days_excluded"],
            "continuity": ["k_cells_per_region", "gapfill", "days_excluded"],
            "sources": ["summary", "lowest_regional_error", "days_excluded"],
-           "selection": ["winner", "why", "fire_size_threshold_mw", "days_excluded"]}
+           "selection": ["winner", "why", "fire_size_threshold_mw", "days_excluded"],
+           "frp": ["winner", "why", "days_excluded"]}
 
 
 def main(argv: list[str] | None = None) -> None:

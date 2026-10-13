@@ -132,3 +132,19 @@ def test_sources_picks_the_stable_satellite(tmp_path):
     assert rep["lowest_regional_error"] == "Aqua"
     assert rep["drift_pct_per_year"]["Terra"]["florida"] > 5 > abs(rep["drift_pct_per_year"]["Aqua"]["florida"])
     assert {"sources_validation.csv", "sources_step.csv", "sources_yearly_ratio.csv"} <= {p.name for p in (s.processed_dir / "counts").iterdir()}
+
+
+def test_counts_uses_one_factor_per_source_piece(tmp_path):
+    """D19: merged MODIS for the early years, Aqua alone later, each with its own k.
+    Aqua sees half of the fires MODIS sees here (30% vs 60%), so its k is about double."""
+    s = _settings(tmp_path)
+    s.raw["counts"]["source_segments"] = [["MODIS", 2000, 2013], ["Aqua", 2014, 2100]]
+    _write_fires(s)
+    rep = run_counts(s)
+    segs = rep["k_per_segment"]
+    assert 1.5 < segs["MODIS 2000-2013"]["florida"] < 1.85
+    assert 3.0 < segs["Aqua 2014-2100"]["florida"] < 3.7
+    hold = {r["region"]: r for r in rep["holdout"]}["florida"]
+    assert hold["segment"] == "Aqua 2014-2100" and abs(hold["total_error_pct"]) < 6
+    step = {r["region"]: r for r in rep["step_2012"]}["florida"]
+    assert 0.9 < step["step_harmonised"] < 1.1

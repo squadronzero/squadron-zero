@@ -186,24 +186,48 @@ def step_at_switch(monthly: pd.DataFrame, factors: pd.DataFrame, source: str, re
     return pd.DataFrame(rows)
 
 
+def source_segments(cfg: dict) -> list[list]:
+    """The MODIS source as [group, first year, last year] pieces (D19: merged Terra+Aqua to
+    2019, Aqua alone from 2020). Falls back to one piece from `source`."""
+    segs = cfg.get("source_segments")
+    return [[str(g), int(a), int(b)] for g, a, b in segs] if segs else [[cfg.get("source", "MODIS"), 1900, 2100]]
+
+
 def run_counts(settings: Settings) -> dict:
     cfg = settings.raw.get("counts") or {}
-    source, reference = cfg.get("source", "MODIS"), cfg.get("reference", "S-NPP")
+    segments = source_segments(cfg)
+    reference = cfg.get("reference", "S-NPP")
     min_cells = int(cfg.get("min_cells_per_month", 30))
     periods = settings["periods"]
     cal = _years(periods["calibration_start"], periods["calibration_end"])
     hold = _years(periods["holdout_start"], periods["holdout_end"])
+    switch = pd.Timestamp(periods["viirs_start"]).year
 
     daily = daily_series(settings)
     if daily.empty:
         return {"stage": "counts", "note": "no cell-days found"}
-    sats = sorted({s for g in (source, reference) for s in GROUPS[g]})
+    sats = sorted({s for g, *_ in segments for s in GROUPS[g]} | set(GROUPS[reference]))
     bad = bad_days(settings, sats) if cfg.get("exclude_gap_days", True) else None
     monthly = _monthly(daily, bad)
-    factors = fit_factors(monthly, source, reference, cal, min_cells)
-    val = validate(monthly, factors, source, reference, hold)
-    step = step_at_switch(_monthly(daily, None), factors, source, reference,
-                          pd.Timestamp(periods["viirs_start"]).year)
+
+    # Each piece of the source gets its own k, fitted on the calibration years inside its
+    # span (all calibration years if it has none there), and is tested on its own holdout years.
+    facs, vals, step = [], [], pd.DataFrame()
+    for group, y0, y1 in segments:
+        span = set(range(y0, y1 + 1))
+        f = fit_factors(monthly, group, reference, [y for y in cal if y in span] or cal, min_cells)
+        f.insert(0, "segment", f"{group} {y0}-{y1}")
+        facs.append(f)
+        hy = [y for y in hold if y in span]
+        if hy:
+            v = validate(monthly, f, group, reference, hy)
+            if len(v):
+                v.insert(0, "segment", f"{group} {y0}-{y1}")
+                vals.append(v)
+        if (switch - 1) in span and step.empty:     # the piece that covers the years before VIIRS
+            step = step_at_switch(_monthly(daily, None), f, group, reference, switch)
+    factors = pd.concat(facs, ignore_index=True)
+    val = pd.concat(vals, ignore_index=True) if vals else pd.DataFrame()
 
     out = settings.processed_dir / "counts"
     out.mkdir(parents=True, exist_ok=True)
@@ -212,17 +236,21 @@ def run_counts(settings: Settings) -> dict:
     val.to_csv(out / "validation_holdout.csv", index=False)
     step.to_csv(out / "step_2012.csv", index=False)
 
-    k_year = factors.groupby("region")["k_region"].first().round(3).to_dict() if len(factors) else {}
+    k_year = {seg: f.groupby("region")["k_region"].first().round(3).to_dict()
+              for seg, f in factors.groupby("segment", sort=False)}
+    first = factors["segment"].iloc[0] if len(factors) else None
     report = {
-        "stage": "counts", "source": source, "reference": reference,
+        "stage": "counts", "source_segments": segments, "reference": reference,
         "calibration_years": [cal[0], cal[-1]], "holdout_years": [hold[0], hold[-1]],
         "outage_days_excluded": None if bad is None else int(len(bad)),
-        "k_per_region": k_year,
+        "k_per_region": k_year.get(first, {}),
+        "k_per_segment": k_year,
         "holdout": val.to_dict("records"),
         "step_2012": step.to_dict("records"),
         "outputs": [str(p.relative_to(settings.processed_dir)) for p in sorted(out.iterdir())],
     }
     with pd.option_context("display.width", 200, "display.max_columns", 20):
+        print(f"[counts] source: {', '.join(f'{g} {a}-{b}' for g, a, b in segments)}", flush=True)
         print(f"[counts] holdout ({hold[0]}-{hold[-1]}), harmonised MODIS vs real VIIRS:\n"
               + (val.to_string(index=False) if len(val) else "none"), flush=True)
         print("[counts] jump at the 2012 switch (1.0 = none):\n"
