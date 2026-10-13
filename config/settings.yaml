@@ -116,9 +116,11 @@ qc:
   # low_fraction x the median of the surrounding window_days.
   window_days: 31
   low_fraction: 0.25
-  # Before/after comparison for a possible processing change (MODIS version label
-  # changes from 6.03 to 61.03 at the start of 2023).
+  # Before/after comparisons for MODIS processing changes found by the scan stage:
+  # version label 6.2 (2002-2017) -> 6.03 (2018-2022) -> 61.03 (2023 onwards). The 2018
+  # change also brought about 14x more cells labelled as non-fire sources.
   step_checks:
+    - {family: MODIS, at: "2018-01-01", years_each_side: 3}
     - {family: MODIS, at: "2023-01-01", years_each_side: 3}
 
 checks:
