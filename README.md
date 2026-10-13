@@ -23,13 +23,29 @@ pipeline/
   shift/qc.py                  data health check (coverage, gaps, ratios)
   shift/crosscheck.py          global yearly files vs Florida form download
   shift/run.py                 one command runs every stage
+  shift/quickstart.py          2-minute demo on samples/florida_sample.zip
   tests/                       automated checks
+samples/                       small real FIRMS sample for the quickstart
 data/                          not in git; raw files live on shared Google Drive
 ```
 
 Planned: `api/` (FastAPI) and `web/` (React + MapLibre) in later phases.
 
-## Quick start
+## Try it in 2 minutes (no download, no account)
+
+```bash
+git clone https://github.com/squadronzero/squadron-zero.git && cd squadron-zero/pipeline
+pip install -r requirements.txt
+python -m shift.quickstart
+```
+
+This runs the whole method on `samples/florida_sample.zip`, about 57,000 real NASA FIRMS
+detections over Florida for 2020 and 2023: clean and filter, grid to 0.05 deg cell-days,
+fit the MODIS -> VIIRS calibration on 2020, and test it on 2023. It finishes in seconds
+and prints the formula and the test scores at four scales. Because it uses one year to fit,
+its formula differs from the full 2012-2021 fit (slope 0.317, intercept 24.8).
+
+## Quick start (full pipeline)
 
 ```bash
 cd pipeline
@@ -59,8 +75,20 @@ Each stage writes `data/processed/report_<stage>.json` with row counts and rejec
 
 ## Data sources
 
-- NASA FIRMS MODIS Collection 6.1 active fires (Terra and Aqua)
-- NASA FIRMS VIIRS 375 m active fires (Suomi NPP)
+- NASA FIRMS MODIS Collection 6.1 active fires (Terra and Aqua), https://firms.modaps.eosdis.nasa.gov/
+- NASA FIRMS VIIRS 375 m active fires (Suomi NPP), https://firms.modaps.eosdis.nasa.gov/
+- Florida state outline (`config/regions/florida.geojson`): public-domain US state boundary
+
+## Tools and references
+
+Python, pandas, NumPy, PyArrow, PyYAML, Shapely, pytest; Google Colab and Google Drive;
+GitHub Actions. MODIS C6.1 and VIIRS 375 m active-fire user guides (NASA FIRMS).
+
+## Use of AI
+
+Parts of the code, tests and documentation in this repository were written with the help
+of an AI assistant (Anthropic's Claude), reviewed and run by Team Squadron Zero. All data
+are NASA FIRMS data; no results are AI-generated.
 
 ## Licence
 

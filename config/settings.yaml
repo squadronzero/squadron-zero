@@ -36,6 +36,7 @@ regions:
   # so the clip is needed to reproduce v1 (D16).
   clip:
     florida: config/regions/florida.geojson
+    sample: config/regions/florida.geojson   # 2-minute demo (python -m shift.quickstart)
 
 filters:
   # FIRMS `type` field: 0 = presumed vegetation fire, 1 = active volcano,
@@ -72,7 +73,7 @@ calibration:
   viirs_satellites: [S-NPP]
   # Datasets the v1 calibration runs on. Global calibration is done per region in
   # Phase 2 (loading every global year at once would not fit in Colab memory).
-  run_on_datasets: [florida, test]
+  run_on_datasets: [florida, test, sample]
   # Drop days when any satellite in the model was not fully working (qc coverage table).
   # Otherwise a Terra outage makes "MODIS" (Terra + Aqua) look weak against VIIRS.
   exclude_gap_days: true
