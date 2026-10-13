@@ -301,3 +301,116 @@ def run_continuity(settings: Settings) -> dict:
               + (val.to_string(index=False) if len(val) else "none"), flush=True)
         print("[continuity] fire power ratio S-NPP / NOAA-20:\n" + (frp.to_string(index=False) if len(frp) else "none"), flush=True)
     return report
+
+
+# ---------------------------------------------------------------- fix 3: which MODIS satellite
+
+def yearly_ratio(monthly: pd.DataFrame, source: str, reference: str, years: list[int]) -> pd.DataFrame:
+    """Reference active cells / source active cells per region and year. A stable sensor
+    gives a flat line; orbital drift shows up as a trend."""
+    m = monthly[monthly["year"].isin(years) & monthly["group"].isin([source, reference])]
+    piv = (m.pivot_table(index=["region", "year", "month"], columns="group", values="active_cells", aggfunc="sum")
+             .dropna().reset_index())
+    if source not in piv or reference not in piv:
+        return pd.DataFrame(columns=["region", "year", "ratio"])
+    y = piv.groupby(["region", "year"], as_index=False)[[source, reference]].sum()
+    y["ratio"] = (y[reference] / y[source]).round(4)
+    return y[["region", "year", "ratio"]]
+
+
+def drift_pct_per_year(ratios: pd.DataFrame) -> dict:
+    """Straight-line trend of the yearly ratio, as % of its mean per year, per region."""
+    out = {}
+    for region, r in ratios.groupby("region"):
+        if len(r) < 3:
+            continue
+        slope = np.polyfit(r["year"].to_numpy(float), r["ratio"].to_numpy(float), 1)[0]
+        out[region] = round(float(100 * slope / r["ratio"].mean()), 2)
+    return out
+
+
+def run_sources(settings: Settings) -> dict:
+    """Phase 2, fix 3: calibrate from Aqua alone, Terra alone, or both merged?
+
+    Terra's orbit has been drifting to an earlier overpass time since 2020 (end of mission
+    manoeuvres), so it sees fewer afternoon fires each year, and that drift lands in the
+    2022-2025 holdout. Aqua is more stable. For each candidate the stage fits the same
+    k-per-region-and-month as fix 1, with the SAME left-out days for every candidate (any of
+    Terra, Aqua, S-NPP not fully working), then compares holdout error, the 2012 step and
+    the drift of the yearly S-NPP/candidate ratio. Reads counts/daily.parquet (run `counts` first).
+    """
+    cfg = settings.raw.get("sources") or {}
+    candidates = cfg.get("candidates", ["MODIS", "Aqua", "Terra"])
+    reference = cfg.get("reference", "S-NPP")
+    min_cells = int(cfg.get("min_cells_per_month", 30))
+    periods = settings["periods"]
+    cal = _years(periods["calibration_start"], periods["calibration_end"])
+    hold = _years(periods["holdout_start"], periods["holdout_end"])
+    out = settings.processed_dir / "counts"
+    path = out / "daily.parquet"
+    if not path.exists():
+        return {"stage": "sources", "note": "no counts/daily.parquet: run the counts stage first"}
+    daily = pd.read_parquet(path)
+    daily["acq_date"] = pd.to_datetime(daily["acq_date"])
+
+    sats = sorted({s for g in candidates + [reference] for s in GROUPS[g]})
+    bad = bad_days(settings, sats) if cfg.get("exclude_gap_days", True) else None
+    monthly = _monthly(daily, bad)
+    switch = pd.Timestamp(periods["viirs_start"]).year
+    overlap = list(range(cal[0], hold[-1] + 1))
+
+    vals, steps, ratios, drift, factors = [], [], [], {}, []
+    for src in candidates:
+        f = fit_factors(monthly, src, reference, cal, min_cells)
+        v = validate(monthly, f, src, reference, hold)
+        s = step_at_switch(_monthly(daily, None), f, src, reference, switch)
+        r = yearly_ratio(monthly, src, reference, overlap)
+        for df in (f, v, s, r):
+            if len(df):
+                df.insert(0, "source", src)
+        factors.append(f); vals.append(v); steps.append(s); ratios.append(r)
+        drift[src] = drift_pct_per_year(r.drop(columns="source")) if len(r) else {}
+    val = pd.concat(vals, ignore_index=True)
+    step = pd.concat(steps, ignore_index=True)
+    ratio = pd.concat(ratios, ignore_index=True)
+    fac = pd.concat(factors, ignore_index=True)
+
+    # One line per candidate: how well it does across the test regions (global kept separate).
+    summary = {}
+    for src in candidates:
+        v = val[val["source"] == src]
+        reg = v[v["region"] != "global"]
+        g = v[v["region"] == "global"]
+        summary[src] = {
+            "global_r2": float(g["r2_harmonised"].iloc[0]) if len(g) else None,
+            "global_error_pct": float(g["total_error_pct"].iloc[0]) if len(g) else None,
+            "regions_median_r2": round(float(reg["r2_harmonised"].median()), 4) if len(reg) else None,
+            "regions_mean_abs_error_pct": round(float(reg["total_error_pct"].abs().mean()), 2) if len(reg) else None,
+            "regions_worst_abs_error_pct": round(float(reg["total_error_pct"].abs().max()), 2) if len(reg) else None,
+            "global_drift_pct_per_year": drift[src].get("global"),
+        }
+    best = min((s for s in summary if summary[s]["regions_mean_abs_error_pct"] is not None),
+               key=lambda s: summary[s]["regions_mean_abs_error_pct"], default=None)
+
+    val.to_csv(out / "sources_validation.csv", index=False)
+    step.to_csv(out / "sources_step.csv", index=False)
+    ratio.to_csv(out / "sources_yearly_ratio.csv", index=False)
+    fac.to_csv(out / "sources_factors.csv", index=False)
+
+    report = {"stage": "sources", "candidates": candidates, "reference": reference,
+              "calibration_years": [cal[0], cal[-1]], "holdout_years": [hold[0], hold[-1]],
+              "days_excluded": None if bad is None else int(len(bad)),
+              "summary": summary, "lowest_regional_error": best,
+              "drift_pct_per_year": drift,
+              "holdout": val.to_dict("records"), "step": step.to_dict("records")}
+    with pd.option_context("display.width", 200, "display.max_columns", 20):
+        err = val.pivot(index="region", columns="source", values="total_error_pct")[candidates]
+        r2 = val.pivot(index="region", columns="source", values="r2_harmonised")[candidates]
+        st = step.pivot(index="region", columns="source", values="step_harmonised")[candidates]
+        st["real_change"] = step[step["source"] == candidates[0]].set_index("region")["real_change_modis"]
+        dr = pd.DataFrame(drift)[candidates]
+        print(f"[sources] holdout ({hold[0]}-{hold[-1]}) total error % (S-NPP predicted from each):\n{err.to_string()}", flush=True)
+        print(f"[sources] holdout R2:\n{r2.to_string()}", flush=True)
+        print(f"[sources] 2012 step after harmonisation (1.0 = none; compare real_change):\n{st.to_string()}", flush=True)
+        print(f"[sources] drift of yearly S-NPP/source ratio, % per year ({overlap[0]}-{overlap[-1]}):\n{dr.to_string()}", flush=True)
+    return report

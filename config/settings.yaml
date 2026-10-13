@@ -111,6 +111,15 @@ counts:
   min_cells_per_month: 30  # fewer MODIS active cells than this -> use the region's all-year factor
   exclude_gap_days: true   # leave out days when any of these satellites was not fully working
 
+sources:
+  # Phase 2 fix 3 (stage `sources`, after `counts`): fit fix 1 from MODIS merged, Aqua alone
+  # and Terra alone, with the same left-out days, and compare holdout error, 2012 step and
+  # drift of the yearly S-NPP/source ratio (Terra's orbit drifts from 2020).
+  candidates: [MODIS, Aqua, Terra]
+  reference: S-NPP
+  min_cells_per_month: 30
+  exclude_gap_days: true
+
 continuity:
   # Phase 2 fix 2 (stage `continuity`, after `counts`): S-NPP per NOAA-20 active cell and
   # fire power, per test region and calendar month. NOAA-20 data start in 2018 (partial

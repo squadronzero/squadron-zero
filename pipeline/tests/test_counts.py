@@ -98,3 +98,37 @@ def test_continuity_ties_noaa20_to_snpp_and_fills_the_gap(tmp_path):
     frp = {r["region"]: r for r in rep["frp"]}["florida"]
     assert 1.07 < frp["k_frp"] < 1.15 and abs(frp["test_total_frp_error_pct"]) < 3
     assert rep["gapfill"]["days"] == 31 and rep["gapfill"]["first"] == "2025-05-01"
+
+
+def test_sources_picks_the_stable_satellite(tmp_path):
+    """Aqua sees a steady 50% of fires. Terra sees 50% until 2013, then fewer each year
+    (orbital drift). Fitted on 2012-2013 and tested on 2014-2015, Aqua alone must beat
+    Terra alone and Terra must show the drift."""
+    from shift.counts import run_sources
+    s = _settings(tmp_path)
+    rng = np.random.default_rng(3)
+    rows = []
+    for day in pd.date_range("2009-01-01", "2015-12-31"):
+        terra_p = 0.5 if day.year <= 2013 else 0.5 - 0.12 * (day.year - 2013)
+        for f in range(20):
+            lat, lon = 26.02 + 0.1 * (f % 10), -81.02 - 0.1 * (day.dayofyear % 20) - 2.0 * (f // 10)
+            if rng.random() < 0.5:
+                rows.append((day, lat, lon, "Aqua", "MODIS"))
+            if rng.random() < terra_p:
+                rows.append((day, lat, lon, "Terra", "MODIS"))
+            if day >= pd.Timestamp("2012-01-20"):
+                rows.append((day, lat, lon, "S-NPP", "VIIRS"))
+    det = pd.DataFrame(rows, columns=["acq_date", "lat", "lon", "satellite", "sensor_family"])
+    det["frp_mw"], det["daynight"], det["confidence_class"], det["type_known"] = 10.0, "D", "nominal", True
+    for _, d in det.groupby("sensor_family"):
+        write_celldays(to_celldays(d, 0.05), s.celldays_dir)
+
+    run_counts(s)
+    rep = run_sources(s)
+    hold = {(r["source"], r["region"]): r for r in rep["holdout"]}
+    aqua, terra = hold[("Aqua", "florida")], hold[("Terra", "florida")]
+    assert abs(aqua["total_error_pct"]) < 5
+    assert abs(terra["total_error_pct"]) > 20
+    assert rep["lowest_regional_error"] == "Aqua"
+    assert rep["drift_pct_per_year"]["Terra"]["florida"] > 5 > abs(rep["drift_pct_per_year"]["Aqua"]["florida"])
+    assert {"sources_validation.csv", "sources_step.csv", "sources_yearly_ratio.csv"} <= {p.name for p in (s.processed_dir / "counts").iterdir()}

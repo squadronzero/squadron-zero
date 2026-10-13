@@ -10,6 +10,7 @@
     python -m shift.run --dataset global --stage crosscheck  # yearly files vs Florida download
     python -m shift.run --dataset global --stage counts      # Phase 2 fix 1: detection-count harmonisation
     python -m shift.run --dataset global --stage continuity  # Phase 2 fix 2: tie NOAA-20 to S-NPP (after counts)
+    python -m shift.run --dataset global --stage sources     # Phase 2 fix 3: Aqua, Terra or both? (after counts)
     python -m shift.run --settings path/to/other_settings.yaml
 
 Run from the `pipeline/` folder (or add it to PYTHONPATH).
@@ -23,7 +24,7 @@ import time
 from .aggregate import run_aggregate
 from .calibrate import run_calibrate
 from .config import load_settings
-from .counts import run_continuity, run_counts
+from .counts import run_continuity, run_counts, run_sources
 from .crosscheck import run_crosscheck
 from .fetch import run_fetch
 from .ingest import run_ingest, write_report
@@ -39,13 +40,14 @@ STAGES = {
 }
 # Stages that only run when asked for by name (downloads and checks).
 EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck": run_crosscheck,
-                "counts": run_counts, "continuity": run_continuity}
+                "counts": run_counts, "continuity": run_continuity, "sources": run_sources}
 # What to print at the end of each stage (the full report is always saved as JSON).
 SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "qc": ["date_range", "days_by_status", "step_checks", "real_fires_in_mask_pct"],
            "crosscheck": ["verdict", "totals"],
            "counts": ["k_per_region", "outage_days_excluded"],
-           "continuity": ["k_cells_per_region", "gapfill", "days_excluded"]}
+           "continuity": ["k_cells_per_region", "gapfill", "days_excluded"],
+           "sources": ["summary", "lowest_regional_error", "days_excluded"]}
 
 
 def main(argv: list[str] | None = None) -> None:
