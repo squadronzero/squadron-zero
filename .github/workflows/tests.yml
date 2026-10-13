@@ -1,0 +1,30 @@
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: colab-like (older versions)
+            python: "3.11"
+            pins: "pandas==2.2.3 numpy==1.26.4 pyarrow==15.0.2 shapely==2.0.6"
+          - name: newest allowed
+            python: "3.13"
+            pins: ""
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r pipeline/requirements.txt ${{ matrix.pins }}
+      - name: Run tests
+        working-directory: pipeline
+        run: python -m pytest -q
