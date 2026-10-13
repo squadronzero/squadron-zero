@@ -19,6 +19,9 @@ pipeline/
   shift/ingest.py              stage 1: clean, filter, de-duplicate -> L1 detections
   shift/aggregate.py           stage 2: grid to 0.05 deg cell-days -> L2
   shift/fetch.py               downloads FIRMS yearly world files straight to cell-days
+  shift/scan.py                re-reads yearly files: versions, non-fire sources, fingerprints
+  shift/qc.py                  data health check (coverage, gaps, ratios)
+  shift/crosscheck.py          global yearly files vs Florida form download
   shift/run.py                 one command runs every stage
   tests/                       automated checks
 data/                          not in git; raw files live on shared Google Drive
@@ -42,6 +45,9 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 | Stage | Input | Output | Status |
 | --- | --- | --- | --- |
 | fetch | FIRMS yearly world zips | L2 cell-days (global, no raw kept) | Done |
+| scan | FIRMS yearly world zips (re-read) | version labels, non-fire source cells + static-source mask, file fingerprints | Done |
+| qc | L2 | daily coverage, data gaps, yearly ratios, version step check | Done |
+| crosscheck | L2 global + L2 florida | download-route agreement, PASS/CHECK | Done |
 | ingest | FIRMS CSV (archive + NRT) | L1 detections | Done |
 | aggregate | L1 | L2 cell-days, 0.05 deg | Done |
 | calibrate | L2 overlap 2012-2021 | v1 OLS model + validation at 4 scales | Done (v1 method) |

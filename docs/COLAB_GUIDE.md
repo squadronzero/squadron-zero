@@ -9,20 +9,22 @@ There are two datasets, each with its own folders so they never mix:
 | `florida` | `SHIFT/data/raw/florida/` (FIRMS form downloads, v1 box) | Checking the new pipeline against the v1 prototype |
 | `global` | Yearly world files fetched automatically; `SHIFT/data/raw/global/` only for recent months | The final product |
 
-## 1. Shared Drive folder (one person, once)
+## 1. Drive folder (one person, once)
 
-Create this in Google Drive and share `SHIFT` with the whole team as Editor:
+The folder lives in the team account **squadronzero10**, and only that account runs the pipeline (files count against the storage of whoever creates them). Create:
 
 ```
 SHIFT/
   data/
     raw/
-      florida/     Florida FIRMS CSV files, original file names unchanged
-      global/      only form downloads after fetch.last_year (e.g. 1 Jan 2026 to today)
+      florida/     Florida FIRMS downloads: the ZIPs as they are, or their CSVs (not both)
+      global/      only form downloads after fetch.last_year (1 Jan 2026 onwards), ZIPs as they are
     processed/     the pipeline writes here (florida/ and global/ subfolders)
 ```
 
-Every team member must then open "Shared with me", right-click `SHIFT`, and choose **Organize > Add shortcut > My Drive**. Without the shortcut, Colab cannot see the folder at `MyDrive/SHIFT`.
+squadronzero10 needs no shortcut. Teammates who only look at outputs get Viewer access; if one ever needs to run Colab with their own account, they add a shortcut (Shared with me > right-click `SHIFT` > Organize > Add shortcut > My Drive). Keep General access set to **Restricted**.
+
+After big reruns, empty the Drive trash: deleted files still count against the 15 GB for 30 days.
 
 ## 2. Setup cell (run at the start of every session)
 
@@ -50,7 +52,7 @@ drive.mount('/content/drive')
 
 ## 3. Florida check (v1 comparison)
 
-Unzip the Florida FIRMS downloads into `SHIFT/data/raw/florida/`, keeping the original file names (`fire_archive_...`, `fire_nrt_...`). Then:
+Put the Florida FIRMS downloads into `SHIFT/data/raw/florida/`: the ZIPs unchanged, or their CSVs with the original names (`fire_archive_...`, `fire_nrt_...`). Detections are clipped to Florida's state outline (`config/regions/florida.geojson`, D16) to match v1. Then:
 
 ```python
 %cd /content/squadron-zero/pipeline
@@ -79,10 +81,30 @@ Then everything (MODIS 2002 to 2025, VIIRS 2012 to 2025):
 
 - Each finished year leaves a marker in `SHIFT/data/processed/global/_fetch_done/`. If Colab disconnects, rerun the setup cell and the same command: finished years are skipped.
 - A year with no file on the server is listed under `missing` in the report. That is expected for the current year.
-- Data after `fetch.last_year` (2025) comes from one FIRMS form request per sensor (1 Jan 2026 to today, whole world), unzipped into `SHIFT/data/raw/global/`. Then run `!python -m shift.run --dataset global`. The pipeline refuses form data that overlaps the yearly files, so nothing is counted twice.
+- Data after `fetch.last_year` (2025) comes from one FIRMS form request per sensor (1 Jan 2026 to today, whole world). Drop the ZIPs unchanged into `SHIFT/data/raw/global/` (no unzipping), then run `!python -m shift.run --dataset global`. The pipeline refuses form data that overlaps the yearly files, so nothing is counted twice.
+- Every download is fingerprinted (sha256, size, date) in its `_fetch_done` marker.
 - Calibration is skipped for the global dataset for now; per-region calibration comes in Phase 2.
 
-## 5. If something goes wrong
+## 5. Checks (scan, qc, crosscheck)
+
+Run after the global fetch. None of them change the cell-day record.
+
+```python
+%cd /content/squadron-zero/pipeline
+!python -m shift.run --dataset global --stage scan        # about 25 min, resumable
+!python -m shift.run --dataset global --stage qc          # a few minutes
+!python -m shift.run --dataset global --stage crosscheck  # about 1 min, needs the Florida outputs
+```
+
+| Stage | What it does | Output |
+| --- | --- | --- |
+| `scan` | Re-reads each yearly file once: data version labels per year, cells FIRMS labels as non-fire heat sources (volcano, gas flare/industry, offshore), file fingerprints | `processed/global/_scan_done/`, `processed/global/static_sources/` (incl. `static_cells.parquet`, the static-source mask) |
+| `qc` | Data health: detections per satellite per day, silent or low days, gap runs, yearly ratios, before/after check for the MODIS version change in 2023 | `processed/global/qc/` (`daily_coverage.parquet`, `gaps.csv`, `yearly.csv`, `monthly.csv`) |
+| `crosscheck` | Compares the Florida form download with the Florida part of the global yearly files, cell-day by cell-day | `processed/global/qc/crosscheck_florida.csv`, verdict PASS or CHECK |
+
+Once `static_cells.parquet` exists, rerun `--dataset global` and `--dataset florida`: near-real-time detections (which carry no fire-type field) that fall in known non-fire cells are then dropped and counted as `static_source_masked`.
+
+## 6. If something goes wrong
 
 | Message | Cause | Fix |
 | --- | --- | --- |

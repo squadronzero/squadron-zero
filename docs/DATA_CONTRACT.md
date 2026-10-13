@@ -45,7 +45,8 @@ Rules:
 
 1. Only rows passing the filters in `config/settings.yaml` are kept. If the dataset has a boundary under `regions.clip` (Florida does), rows outside it are dropped and counted as `outside_region`.
 2. Duplicate detections (same satellite, time, latitude and longitude) are removed. Archive rows win over NRT rows.
-3. Every rejected row is counted by reason in the run report.
+3. Detections with no FIRMS type field (near-real-time files) that fall in a grid cell FIRMS labelled as a non-fire heat source in at least `static_mask.min_years` archive years are dropped as `static_source_masked` (mask built by the scan stage).
+4. Every rejected row is counted by reason in the run report.
 
 ---
 
