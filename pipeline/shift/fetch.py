@@ -18,6 +18,7 @@ a marker, an interrupted run (Colab disconnect) simply continues where it stoppe
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import tempfile
@@ -42,21 +43,34 @@ def zip_url(base_url: str, prefix: str, year: int) -> str:
     return f"{base_url.rstrip('/')}/{prefix}_{year}_all_countries.zip"
 
 
-def download(url: str, dest: Path, retries: int = 3) -> bool:
-    """Download url to dest. Returns False if the file does not exist (403/404)."""
+def download(url: str, dest: Path, retries: int = 3) -> dict | None:
+    """Download url to dest.
+
+    Returns a fingerprint {sha256, bytes, last_modified} so every result can be traced to
+    the exact file NASA served, or None if the file does not exist (403/404).
+    """
     for attempt in range(1, retries + 1):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            h = hashlib.sha256()
+            n = 0
             with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as out:
-                shutil.copyfileobj(resp, out, length=1 << 20)
-            return True
+                last_modified = resp.headers.get("Last-Modified") if hasattr(resp, "headers") else None
+                while True:
+                    block = resp.read(1 << 20)
+                    if not block:
+                        break
+                    h.update(block)
+                    out.write(block)
+                    n += len(block)
+            return {"sha256": h.hexdigest(), "bytes": n, "last_modified": last_modified}
         except urllib.error.HTTPError as e:
             if e.code in (403, 404):
-                return False
+                return None
             err = e
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             if isinstance(getattr(e, "reason", None), FileNotFoundError):
-                return False
+                return None
             err = e
         time.sleep(3 * attempt)
     raise RuntimeError(f"download failed after {retries} attempts: {url} ({err})")
@@ -128,10 +142,11 @@ def run_fetch(settings: Settings, years: list[int] | None = None, families: list
             t0 = time.time()
             work = Path(tempfile.mkdtemp(prefix=f"shift_{key}_", dir=scratch_root))
             try:
-                zip_path, used = work / f"{key}.zip", None
+                zip_path, used, fp = work / f"{key}.zip", None, None
                 for prefix in spec["prefixes"]:
                     url = zip_url(cfg["base_url"], prefix, year)
-                    if download(url, zip_path):
+                    fp = download(url, zip_path)
+                    if fp:
                         used = url
                         break
                 if not used:
@@ -144,7 +159,8 @@ def run_fetch(settings: Settings, years: list[int] | None = None, families: list
                         shutil.rmtree(out_dir / rel, ignore_errors=True)
                     marker.unlink()
                 partitions, counts = process_zip(zip_path, family, settings, work, out_dir)
-                info = {"url": used, "zip_mb": size_mb, **counts, "partitions": partitions,
+                info = {"url": used, "zip_mb": size_mb, "sha256": fp["sha256"], "bytes": fp["bytes"],
+                        "last_modified": fp["last_modified"], **counts, "partitions": partitions,
                         "seconds": round(time.time() - t0, 1)}
                 marker.write_text(json.dumps(info, indent=1))
                 report["years"][key] = {k: v for k, v in info.items() if k != "partitions"}

@@ -100,6 +100,35 @@ fetch:
   # Local scratch folder for downloads (null = system temp). On Colab use local disk, not Drive.
   tmp_dir: null
 
+static_mask:
+  # Grid cells FIRMS labelled as non-fire heat sources (volcano, gas flare/industry,
+  # offshore) in the yearly archive files, recorded by the scan stage. Detections WITHOUT
+  # a type field (near-real-time files) that fall in these cells are dropped as
+  # static_source_masked. Detections with a type field are filtered by type as usual.
+  enabled: true
+  sources_dir: data/processed/global/static_sources
+  path: data/processed/global/static_sources/static_cells.parquet
+  min_years: 2        # a cell must be labelled in at least this many years
+
+qc:
+  # Data health check (qc stage). A satellite-day is "none" when that satellite has no
+  # detections at all inside its operating period, "low" when its count is below
+  # low_fraction x the median of the surrounding window_days.
+  window_days: 31
+  low_fraction: 0.25
+  # Before/after comparison for a possible processing change (MODIS version label
+  # changes from 6.03 to 61.03 at the start of 2023).
+  step_checks:
+    - {family: MODIS, at: "2023-01-01", years_each_side: 3}
+
+checks:
+  # Cross-check: the Florida form download vs the Florida part of the global yearly files.
+  crosscheck:
+    reference_dataset: florida
+    region: config/regions/florida.geojson
+    inset_deg: 0.05     # only cells at least this far inside the boundary are compared
+    years: [2012, 2025]
+
 processing:
   # Rows read per chunk. Lower this on Colab if memory runs out.
   chunk_rows: 1000000

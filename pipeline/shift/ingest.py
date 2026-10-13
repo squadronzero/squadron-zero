@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import region
+from . import region, static_mask
 from .adapters import get_adapter
 from .config import Settings
 from .contract import L1_COLUMNS, conform, validate_l1
@@ -33,6 +33,12 @@ def apply_filters(df: pd.DataFrame, settings: Settings) -> tuple[pd.DataFrame, C
     in_region = region.inside(settings, df["lon"].fillna(0), df["lat"].fillna(0))
     outside = (pd.Series(~in_region, index=df.index) if in_region is not None
                else pd.Series(False, index=df.index))
+    unknown = ~df["type_known"]
+    static = pd.Series(False, index=df.index)
+    if unknown.any():
+        hit = static_mask.in_mask(settings, df["lat"], df["lon"])
+        if hit is not None:
+            static = pd.Series(hit, index=df.index) & unknown
     reasons: list[tuple[str, pd.Series]] = [
         ("bad_datetime", df["acq_datetime_utc"].isna()),
         ("bad_coordinates", ~coords_ok),
@@ -42,6 +48,7 @@ def apply_filters(df: pd.DataFrame, settings: Settings) -> tuple[pd.DataFrame, C
         ("bad_daynight", ~df["daynight"].isin(["D", "N"])),
         ("confidence_filtered", ~df["confidence_class"].isin(f["keep_confidence"])),
         ("non_vegetation_type", df["type_known"] & ~df["fire_type"].isin(f["keep_fire_types"])),
+        ("static_source_masked", static),
         ("unknown_type_dropped", (~df["type_known"]) & (not f["keep_unknown_type"])),
     ]
     keep = pd.Series(True, index=df.index)

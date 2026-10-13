@@ -129,3 +129,24 @@ def test_dataset_folders_are_separate(tmp_path):
     f = load_settings(root=tmp_path, dataset="florida")
     assert g.raw_dir == tmp_path / "data" / "raw" / "global"
     assert f.processed_dir == tmp_path / "data" / "processed" / "florida"
+
+
+def test_scan_versions_static_sources_and_fingerprints(project):
+    from shift.scan import run_scan
+    run_fetch(project)
+    rep = run_scan(project)
+    m = rep["years"]["MODIS_2020"]
+    assert m["versions"] == {"6.03": 6}
+    assert m["same_file_as_fetch"] is True
+    assert len(m["sha256"]) == 64
+    assert m["static_detections"] == {"volcano": 1}          # the Kilauea row, type 1
+    fmarker = json.loads((project.processed_dir / "_fetch_done" / "MODIS_2020.json").read_text())
+    assert fmarker["sha256"] == m["sha256"]                    # fetch marker carries the fingerprint
+    assert rep["version_summary"]["MODIS"]["changes_at"] == []
+    # one year only, so with min_years=2 nothing qualifies; with 1 the volcano cell does
+    assert rep["static_mask"]["cells"] == 0
+    project.raw["static_mask"]["min_years"] = 1
+    from shift.scan import build_static_mask
+    assert build_static_mask(project)["cells"] == 1
+    # rerun skips finished years
+    assert set(run_scan(project)["skipped"]) == {"MODIS_2020", "VIIRS_2020"}
