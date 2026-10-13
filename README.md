@@ -28,6 +28,7 @@ pipeline/
   shift/qc.py                  data health check (coverage, gaps, ratios)
   shift/crosscheck.py          global yearly files vs Florida form download
   shift/counts.py              Phase 2 fix 1: detection-count harmonisation (the 2012 jump)
+  shift/selection.py           Phase 2 fix 3b: six tests choose the MODIS calibration source (D19)
   shift/run.py                 one command runs every stage
   shift/quickstart.py          2-minute demo on samples/florida_sample.zip
   tests/                       automated checks
@@ -77,6 +78,7 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 | counts | L2 global | detection-count harmonisation: active cell-days, MODIS scaled to VIIRS per region and month, 2012 jump measured | Phase 2, fix 1 |
 | continuity | counts daily series | NOAA-20 tied to S-NPP per region and month (cells and fire power), tested on 2024-2025, S-NPP outage days filled | Phase 2, fix 2 |
 | sources | counts daily series | fix 1 fitted from MODIS merged, Aqua alone and Terra alone; holdout error, 2012 step and orbital drift compared | Phase 2, fix 3 |
+| selection | counts daily series + L2 | six fair tests (backward, category agreement, leave-one-year-out, MODIS-era stability, bootstrap, fire size) choose the MODIS calibration source by a pre-registered rule | Phase 2, fix 3b (D19) |
 | harmonise | L2 + model | L3 harmonised record | Phase 2 |
 | validate | L3 + holdout years | metrics per region | Phase 2 |
 | calendar | L3 | climatology, anomalies, critical periods | Phase 3 |

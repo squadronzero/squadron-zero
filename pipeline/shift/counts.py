@@ -39,16 +39,23 @@ GLOBAL = {"bbox": [-180.0, -90.0, 180.0, 90.0], "regime": "whole world"}
 COLS = ["acq_date", "cell_id", "cell_lat", "cell_lon", "satellite", "n_detections", "frp_sum_mw"]
 
 
-def daily_series(settings: Settings) -> pd.DataFrame:
+def daily_series(settings: Settings, groups: dict | None = None,
+                 cell_class: pd.Series | None = None) -> pd.DataFrame:
     """Per region, day and satellite group: detections and active cell-days.
-    Reads the cell-day record one partition at a time (memory stays small)."""
+    Reads the cell-day record one partition at a time (memory stays small).
+    With `cell_class` (a label per cell_id), the counts are split by that label as well
+    (column `size`); cells without a label get "unlabelled"."""
+    groups = groups or GROUPS
     regions = {"global": GLOBAL, **test_regions(settings)}
     root = settings.celldays_dir
+    keys = ["acq_date"] if cell_class is None else ["acq_date", "size"]
     parts = []
     for part in sorted(root.glob("sensor_family=*/year=*/month=*")) if root.exists() else []:
         d = pd.read_parquet(part, columns=COLS)
         d["satellite"] = d["satellite"].astype(str)
-        for group, sats in GROUPS.items():
+        if not d["satellite"].isin({s for v in groups.values() for s in v}).any():
+            continue
+        for group, sats in groups.items():
             g = d[d["satellite"].isin(sats)]
             if g.empty:
                 continue
@@ -56,21 +63,24 @@ def daily_series(settings: Settings) -> pd.DataFrame:
                 g = (g.groupby(["acq_date", "cell_id"], as_index=False)
                       .agg(cell_lat=("cell_lat", "first"), cell_lon=("cell_lon", "first"),
                            n_detections=("n_detections", "sum"), frp_sum_mw=("frp_sum_mw", "sum")))
+            if cell_class is not None:
+                g = g.assign(size=g["cell_id"].map(cell_class).fillna("unlabelled").astype(str))
             for name, reg in regions.items():
                 r = g if name == "global" else g[in_bbox(reg["bbox"], g["cell_lon"], g["cell_lat"])]
                 if r.empty:
                     continue
-                s = r.groupby("acq_date").agg(detections=("n_detections", "sum"),
-                                              active_cells=("cell_id", "size"),
-                                              frp_mw=("frp_sum_mw", "sum")).reset_index()
+                s = r.groupby(keys).agg(detections=("n_detections", "sum"),
+                                        active_cells=("cell_id", "size"),
+                                        frp_mw=("frp_sum_mw", "sum")).reset_index()
                 s["region"], s["group"] = name, group
                 parts.append(s)
+    cols = ["region", "group"] + keys
     if not parts:
-        return pd.DataFrame(columns=["region", "group", "acq_date", "detections", "active_cells", "frp_mw"])
+        return pd.DataFrame(columns=cols + ["detections", "active_cells", "frp_mw"])
     out = pd.concat(parts, ignore_index=True)
     out["acq_date"] = pd.to_datetime(out["acq_date"]).dt.normalize()
     # A day can sit in two partitions only if it came from two sources; add them up.
-    return (out.groupby(["region", "group", "acq_date"], as_index=False)[["detections", "active_cells", "frp_mw"]]
+    return (out.groupby(cols, as_index=False)[["detections", "active_cells", "frp_mw"]]
                .sum().astype({"detections": "int64", "active_cells": "int64"}))
 
 

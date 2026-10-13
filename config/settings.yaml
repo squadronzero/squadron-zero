@@ -120,6 +120,36 @@ sources:
   min_cells_per_month: 30
   exclude_gap_days: true
 
+selection:
+  # Phase 2 fix 3b (stage `selection`, after `counts`): six tests choose the MODIS
+  # calibration source (D19). Each candidate is a list of [group, first year, last year].
+  reference: S-NPP
+  candidates:
+    MODIS: [[MODIS, 2000, 2100]]                         # Terra + Aqua merged (fix 1)
+    Aqua: [[Aqua, 2000, 2100]]
+    Terra: [[Terra, 2000, 2100]]
+    MODIS_then_Aqua: [[MODIS, 2000, 2019], [Aqua, 2020, 2100]]   # drop Terra once its orbit drifts
+  overlap_years: [2012, 2025]          # full MODIS + S-NPP years (leave-one-year-out)
+  backward_fit_years: [2016, 2025]     # test 1: fit late, predict early (how the product is used)
+  backward_test_years: [2012, 2015]
+  forward_fit_years: [2012, 2021]      # the fix 1 split, for comparison
+  forward_test_years: [2022, 2025]
+  modis_first_year: 2002
+  terra_stable_until: 2019             # test 4: Aqua/Terra drift before and after
+  bootstrap_samples: 1000              # test 5
+  seed: 26
+  fire_size_split: true                # test 6: small-fire vs large-fire cells (about 5 extra minutes)
+  min_cells_per_month: 30
+  exclude_gap_days: true
+  # PRE-REGISTERED RULE, fixed on 14 Oct 2026 before the first run (do not change after seeing results):
+  # score = mean category agreement % over the test regions (not global), averaged over the
+  # leave-one-year-out and backward tests. A candidate is out if its global backward error
+  # is beyond +-max_global_backward_error_pct. If several are within tie_margin_points of the
+  # best score, the one with the smallest global false trend (drift) wins.
+  rule:
+    max_global_backward_error_pct: 10
+    tie_margin_points: 2
+
 continuity:
   # Phase 2 fix 2 (stage `continuity`, after `counts`): S-NPP per NOAA-20 active cell and
   # fire power, per test region and calendar month. NOAA-20 data start in 2018 (partial
