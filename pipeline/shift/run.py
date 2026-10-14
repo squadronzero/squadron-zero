@@ -15,6 +15,8 @@
     python -m shift.run --dataset global --stage frp         # Phase 2 fix 4: the intercept problem in fire power (D21)
     python -m shift.run --dataset global --stage worldwide   # D19 and D21 re-tested on a 10-degree grid over the whole Earth
     python -m shift.run --dataset global --stage factors     # D21 for every place on Earth: gap fixes, refinements, factor table
+    python -m shift.run --dataset global --stage confscan    # Phase 2 fix 5: low-confidence fire cell-days, own folder (download)
+    python -m shift.run --dataset global --stage confidence  # Phase 2 fix 5: confidence asymmetry, variants scored
     python -m shift.run --settings path/to/other_settings.yaml
 
 Run from the `pipeline/` folder (or add it to PYTHONPATH).
@@ -38,6 +40,7 @@ from .scan import run_scan
 from .selection import run_selection
 from .tiles import run_worldwide
 from .factors import run_factors
+from .confidence import run_confidence, run_confscan
 
 STAGES = {
     "ingest": run_ingest,
@@ -50,7 +53,8 @@ STAGES = {
 EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck": run_crosscheck,
                 "counts": run_counts, "continuity": run_continuity, "sources": run_sources,
                 "selection": run_selection, "frp": run_frp,
-                "worldwide": run_worldwide, "factors": run_factors}
+                "worldwide": run_worldwide, "factors": run_factors,
+                "confscan": run_confscan, "confidence": run_confidence}
 # What to print at the end of each stage (the full report is always saved as JSON).
 SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "qc": ["date_range", "days_by_status", "step_checks", "real_fires_in_mask_pct"],
@@ -61,7 +65,10 @@ SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "selection": ["winner", "why", "fire_size_threshold_mw", "days_excluded"],
            "frp": ["winner", "why", "days_excluded"],
            "worldwide": ["tiles_with_fire", "tiles_tested", "fire_share_in_tested_tiles_pct"],
-           "factors": ["chosen", "final_frp", "final_cells", "factor_rows"]}
+           "factors": ["chosen", "final_frp", "final_cells", "factor_rows"],
+           "confscan": ["low_share_by_year", "missing", "different_file_from_fetch"],
+           "confidence": ["winner", "why", "low_share_trend", "fire_weighted_mean_gap_pct_points",
+                          "fire_weighted_abs_gap_trend_pct_points_per_year"]}
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -69,16 +76,16 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--settings", help="settings YAML (default: config/settings.yaml)")
     ap.add_argument("--dataset", help="dataset folder to use: global or florida (default: from settings)")
     ap.add_argument("--stage", choices=list(STAGES) + list(EXTRA_STAGES), help="run only this stage")
-    ap.add_argument("--years", type=int, nargs="+", help="fetch/scan only: years to download")
-    ap.add_argument("--family", nargs="+", help="fetch/scan only: products from fetch.products (MODIS, VIIRS, VIIRS_NOAA20)")
-    ap.add_argument("--force", action="store_true", help="fetch/scan only: redo years already done")
+    ap.add_argument("--years", type=int, nargs="+", help="fetch/scan/confscan only: years to download")
+    ap.add_argument("--family", nargs="+", help="fetch/scan/confscan only: products from fetch.products (MODIS, VIIRS, VIIRS_NOAA20)")
+    ap.add_argument("--force", action="store_true", help="fetch/scan/confscan only: redo years already done")
     args = ap.parse_args(argv)
 
     settings = load_settings(args.settings, dataset=args.dataset)
     print(f"dataset: {settings.dataset}  raw: {settings.raw_dir}  processed: {settings.processed_dir}")
     for name in ([args.stage] if args.stage else list(STAGES)):
         t0 = time.time()
-        if name in ("fetch", "scan"):
+        if name in ("fetch", "scan", "confscan"):
             report = EXTRA_STAGES[name](settings, years=args.years, families=args.family, force=args.force)
         elif name in EXTRA_STAGES:
             report = EXTRA_STAGES[name](settings)

@@ -241,6 +241,30 @@ factors:
     refinement_gain_points: 2
     error_limit_pct: 10
 
+confidence:
+  # Phase 2 fix 5 (stages `confscan` then `confidence`): the confidence asymmetry. SHIFT drops
+  # "low" confidence for both sensors, but MODIS low (< 30 of 100) and VIIRS low (its own class)
+  # are different tests: about 4-5% of MODIS fire detections against about 11% of VIIRS.
+  # confscan keeps the low-confidence fire cell-days in their own folder; the main record
+  # is never changed by it.
+  low_subdir: celldays_low
+  # Variants scored, [MODIS from, VIIRS from]: main = as now (nominal + high),
+  # all = low-confidence detections added.
+  variants:
+    current: [main, main]
+    all: [all, all]
+    modis_all: [all, main]
+    viirs_all: [main, all]
+  # PRE-REGISTERED RULE, fixed on 14 Oct 2026 before the run. Same tiles, tests, D19 pieces
+  # and D22 mask as stage factors. Score = mean of the fire-weighted fire power score and the
+  # fire-weighted burning-cell score. A variant is eligible only if its global backward error
+  # is within +-error_limit_pct for both. The current filter stays unless an eligible variant
+  # scores more than gain_points higher AND has at least as many tiles within +-error_limit_pct
+  # for fire power. Among several such variants, the highest score wins.
+  rule:
+    gain_points: 2
+    error_limit_pct: 10
+
 continuity:
   # Phase 2 fix 2 (stage `continuity`, after `counts`): S-NPP per NOAA-20 active cell and
   # fire power, per test region and calendar month. NOAA-20 data start in 2018 (partial

@@ -42,8 +42,13 @@ VARS = {"cells": "active_cells", "frp": "frp_mw"}
 # ---------------------------------------------------------------- one pass over the record
 
 def monthly_world(settings: Settings, groups: dict, size_deg: float, exclude, labels: pd.Series | None,
-                  mask: np.ndarray | None) -> pd.DataFrame:
-    """Burning cells and fire power per tile, fire-size class, in-mask flag, group, year, month."""
+                  mask: np.ndarray | None, extra_root=None) -> pd.DataFrame:
+    """Burning cells and fire power per tile, fire-size class, in-mask flag, group, year, month.
+
+    `extra_root`: a second cell-day folder with the same partition layout (the low-confidence
+    cell-days from stage `confscan`). Its cell-days are added to the main ones, and a cell that
+    appears in both on the same day counts once, so the result is the record with every
+    confidence class kept."""
     root = settings.celldays_dir
     wanted = {s for v in groups.values() for s in v}
     ex = pd.DatetimeIndex(pd.to_datetime(pd.Index(exclude))).normalize() if exclude is not None and len(exclude) else None
@@ -51,6 +56,10 @@ def monthly_world(settings: Settings, groups: dict, size_deg: float, exclude, la
     parts = []
     for part in sorted(root.glob("sensor_family=*/year=*/month=*")) if root.exists() else []:
         d = pd.read_parquet(part, columns=COLS)
+        if extra_root is not None:
+            xp = extra_root / part.relative_to(root)
+            if xp.exists():
+                d = pd.concat([d, pd.read_parquet(xp, columns=COLS)], ignore_index=True)
         d["satellite"] = d["satellite"].astype(str)
         d = d[d["satellite"].isin(wanted)]
         if d.empty:
@@ -62,7 +71,7 @@ def monthly_world(settings: Settings, groups: dict, size_deg: float, exclude, la
             g = d[d["satellite"].isin(sats)]
             if g.empty:
                 continue
-            if len(sats) > 1:
+            if len(sats) > 1 or extra_root is not None:
                 g = (g.groupby(["acq_date", "cell_id"], as_index=False)
                       .agg(cell_lat=("cell_lat", "first"), cell_lon=("cell_lon", "first"), frp_sum_mw=("frp_sum_mw", "sum")))
             cid = g["cell_id"].to_numpy("int64")
@@ -199,12 +208,14 @@ def evaluate(cube: Cube, segments, ref, years, bw_fit, bw_test, smooth, borrow, 
                       "backward_error_pct": b["total_error_pct"], "drift": dr["drift_pct_per_year"]})
     t["score"] = t[["loyo", "backward"]].mean(axis=1)
     w = weights.reindex(t.index).fillna(0)
+    glob = (round(float(100 * (bw["pred"].sum() / bw["real"].sum() - 1)), 2)
+            if len(bw) and bw["real"].sum() > 0 else None)
     ok = t["score"].notna() & (w > 0)
     return {"fire_weighted_score": round(float(np.average(t["score"][ok], weights=w[ok])), 2) if ok.any() else None,
             "median_score": round(float(t["score"].median()), 2),
             "tiles_within_limit_pct": round(float(100 * (t["backward_error_pct"].abs() <= limit).mean()), 1),
             "fire_weighted_abs_drift": round(float(np.average(t["drift"].abs().fillna(0)[ok], weights=w[ok])), 3) if ok.any() else None,
-            "tiles": int(ok.sum()), "per_tile": t}
+            "global_backward_error_pct": glob, "tiles": int(ok.sum()), "per_tile": t}
 
 
 def bootstrap(cube: Cube, segments, ref, years, smooth, borrow, prior, min_v, n: int, seed: int) -> dict:
