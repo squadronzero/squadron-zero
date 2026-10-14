@@ -139,11 +139,13 @@ class Cube:
                 kz_k = self.Z.T @ kz
                 self.last_level = np.where(S >= min_v, 0, 2)
                 self.last_zone_k = kz_k
+                self.last_k_all = np.full(S.shape, np.nan)
                 return (R + prior * kz_k) / (S + prior)
             kz = np.where(Sz >= min_v, Rz / Sz, np.nan)
             kz_k = self.Z.T @ np.nan_to_num(kz, nan=0.0)
             kz_ok = self.Z.T @ (Sz >= min_v)
             k_all = np.where(S.sum(1) >= min_v, R.sum(1) / S.sum(1), np.nan)[:, None]
+            self.last_k_all = np.broadcast_to(k_all, S.shape).copy()
             k = np.where(S >= min_v, R / S, k_all)
             # where each factor came from: 0 own month, 1 own all-year, 2 zone, 3 world
             self.last_level = np.where(S >= min_v, 0, np.where(~np.isnan(k_all) & np.ones_like(S, bool), 1,
@@ -219,7 +221,7 @@ def bootstrap(cube: Cube, segments, ref, years, smooth, borrow, prior, min_v, n:
         base_w = np.zeros(len(cube.years))
         base_w[idx] = 1.0
         k = cube.fit(g, ref, base_w, smooth, borrow, prior, min_v)
-        level, kz = cube.last_level.copy(), cube.last_zone_k.copy()
+        level, kz, kall = cube.last_level.copy(), cube.last_zone_k.copy(), cube.last_k_all.copy()
         draws = []
         for _ in range(n):
             w = np.zeros(len(cube.years))
@@ -240,8 +242,17 @@ def bootstrap(cube: Cube, segments, ref, years, smooth, borrow, prior, min_v, n:
                 vals = lr[zone_of_key == z][np.isfinite(lr[zone_of_key == z])]
                 if len(vals) >= 20:
                     hw[zone_of_key == z] = (np.percentile(vals, 97.5) - np.percentile(vals, 2.5)) / 2
+            # A month that uses the tile's own all-year factor is judged by how much this tile's
+            # own measured months differ from its all-year value (its own seasonality), when it
+            # has at least 4 measured months; otherwise by the zone spread.
+            hw_k = np.broadcast_to(hw[:, None], k.shape).copy()
+            own_m = (level == 0) & (k > 0) & (kall > 0)
+            for i in range(len(cube.keys)):
+                v = np.log(k[i][own_m[i]] / kall[i][own_m[i]])
+                if len(v) >= 4:
+                    hw_k[i, level[i] == 1] = (np.percentile(v, 97.5) - np.percentile(v, 2.5)) / 2
             a = np.log(np.where((hi > 0) & (lo > 0), hi / lo, 1.0)) / 2
-            half = np.sqrt(a ** 2 + hw[:, None] ** 2)
+            half = np.sqrt(a ** 2 + hw_k ** 2)
             borrowed = level >= 1
             lo = np.where(borrowed, k * np.exp(-half), lo)
             hi = np.where(borrowed, k * np.exp(half), hi)
@@ -278,7 +289,9 @@ def run_factors(settings: Settings) -> dict:
     m.to_parquet(out / "factors_world_monthly.parquet", index=False)
 
     tn = pd.Series([tile_name(a, b, tile_deg) for a, b in zip(m["lat0"], m["lon0"])], index=m.index)
-    r = m[(m["group"] == ref) & m["year"].isin(years)].assign(tile=tn)
+    use_mask_for_tiles = bool((settings.raw.get("nonfire") or {}).get("mask_all_years", False))
+    sel = (m["group"] == ref) & m["year"].isin(years) & (~m["in_mask"] if use_mask_for_tiles else True)
+    r = m[sel].assign(tile=tn[sel])           # D22: a tile does not qualify on gas flares alone
     per_tile = r.groupby("tile")["active_cells"].sum() / (12 * len(years))
     tiles = per_tile[per_tile >= min_ref].index
     weights = r.groupby("tile")["active_cells"].sum()
@@ -349,6 +362,9 @@ def run_factors(settings: Settings) -> dict:
 
     frp_tiles = fac[(fac["variable"] == "frp")]
     by_source = frp_tiles.groupby("source")["range_pct"].agg(["size", "median"]).round(1)
+    # fire-weighted median: a factor counts in proportion to the fire it will scale
+    fw = frp_tiles.assign(w=frp_tiles["tile"].map(weights).fillna(0)).dropna(subset=["range_pct"]).sort_values("range_pct")
+    fw_median = float(fw["range_pct"][fw["w"].cumsum() >= fw["w"].sum() / 2].iloc[0]) if fw["w"].sum() else None
     report = {"stage": "factors", "chosen": cur, "fire_size_threshold_mw": round(threshold, 2) if threshold == threshold else None,
               "tiles_with_fire": int(fac["tile"].nunique()), "tiles_tested": int(len(tiles)),
               "masked_cells": int(len(mask)) if mask is not None else 0,
@@ -358,7 +374,8 @@ def run_factors(settings: Settings) -> dict:
               "factor_rows": int(len(fac)),
               "median_range_pct_frp_tested": float(frp_tiles[frp_tiles["tested_tile"]]["range_pct"].median()),
               "median_range_pct_frp_untested": float(frp_tiles[~frp_tiles["tested_tile"]]["range_pct"].median()) if (~frp_tiles["tested_tile"]).any() else None,
-              "frp_factor_sources": by_source.reset_index().to_dict("records")}
+              "frp_factor_sources": by_source.reset_index().to_dict("records"),
+              "fire_weighted_median_range_pct_frp": fw_median}
     with pd.option_context("display.width", 220, "display.max_columns", 20, "display.max_rows", 60):
         print(f"[factors] {report['tiles_with_fire']} tiles with fire, {len(tiles)} tested; {report['masked_cells']} non-fire cells in the mask", flush=True)
         print("[factors] pre-registered sequence on fire power (each step kept only if the rule allows):\n"
@@ -372,4 +389,5 @@ def run_factors(settings: Settings) -> dict:
         print(f"[factors] factor table: {len(fac)} rows (segment x tile x size x month x variable); median 95% range of the "
               f"fire power factor: tested tiles {report['median_range_pct_frp_tested']}%, thin tiles {report['median_range_pct_frp_untested']}%", flush=True)
         print("[factors] where the fire power factors come from (rows, median 95% range %):\n" + by_source.to_string(), flush=True)
+        print(f"[factors] fire-weighted median 95% range of the fire power factor: {fw_median}%", flush=True)
     return report
