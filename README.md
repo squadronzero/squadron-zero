@@ -31,6 +31,7 @@ pipeline/
   shift/selection.py           Phase 2 fix 3b: six tests choose the MODIS calibration source (D19)
   shift/frp.py                 Phase 2 fix 4: fire power without the v1 intercept problem (D21)
   shift/tiles.py               Worldwide check of D19 and D21 on a grid covering the whole Earth
+  shift/factors.py             D21 factors for every place on Earth, gap fixes and refinements
   shift/run.py                 one command runs every stage
   shift/quickstart.py          2-minute demo on samples/florida_sample.zip
   tests/                       automated checks
@@ -83,6 +84,7 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 | selection | counts daily series + L2 | six fair tests (backward, category agreement, leave-one-year-out, MODIS-era stability, bootstrap, fire size) choose the MODIS calibration source by a pre-registered rule | Phase 2, fix 3b (D19) |
 | frp | counts daily series + L2 pairs | fire power harmonisation: v1 line, line with intercept, line through zero, paired ratio and ratio of totals compared with the same tests and rule | Phase 2, fix 4 (D21) |
 | worldwide | L2 global | D19 and D21 re-tested on a 10° grid of tiles over the whole Earth; pre-registered confirm rule; first factors for every place | Phase 2 (fix 8 start) |
+| factors | L2 global + static mask | D21 production factors for every 10° tile (burning cells and fire power, each D19 piece on all its years, bootstrap range); non-fire mask in every year, fire-size split, zone borrowing and seasonal smoothing tested by pre-registered rules | Phase 2 (D21, D22, fixes 6 and 8) |
 | harmonise | L2 + model | L3 harmonised record | Phase 2 |
 | validate | L3 + holdout years | metrics per region | Phase 2 |
 | calendar | L3 | climatology, anomalies, critical periods | Phase 3 |

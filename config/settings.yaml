@@ -201,6 +201,40 @@ worldwide:
     confirm_margin_points: 2
     error_limit_pct: 10
 
+factors:
+  # Stage `factors` (D21, decided 14 Oct): the ratio per place and calendar month for every
+  # 10-degree tile with fire, for burning cells and fire power, on the D19 source pieces,
+  # fitted on all overlap years (the Aqua piece on all of 2020-2025), with a bootstrap range.
+  reference: S-NPP
+  tile_deg: 10
+  zone_deg: 30                       # thin tiles fall back to / borrow from their 30-degree zone
+  min_ref_cells_per_month: 50        # tiles with less fire are given factors but not scored
+  min_cells_per_month: 30            # below this a month uses the fallback chain
+  min_frp_mw_per_month: 300
+  prior_cells: 30                    # strength of borrowing, in burning cells
+  prior_frp_mw: 300                  # strength of borrowing, in MW
+  overlap_years: [2012, 2025]
+  backward_fit_years: [2016, 2025]
+  backward_test_years: [2012, 2015]
+  bootstrap_samples: 200
+  seed: 26
+  exclude_gap_days: true
+  watch_tiles: [N20E000, N20E010, N20E050, N60E050, N60E060, N60E070, N30W110, N20E030, N40E090]
+  # PRE-REGISTERED RULES, fixed on 14 Oct 2026 before the first run. Judged on fire power,
+  # fire-weighted score over the tested tiles (mean of leave-one-year-out and backward
+  # category agreement), in this order:
+  #   1. non-fire mask in every year: kept if the score drops by no more than
+  #      mask_max_drop_points AND the share of tiles within +-error_limit_pct rises
+  #      (it is a data-consistency fix, so it may cost a little agreement)
+  #   2. fire-size split, 3. borrowing from the zone, 4. seasonal smoothing: each kept only if
+  #      it raises the score by more than refinement_gain_points over the current choice.
+  # Thin tiles always get factors through the fallback chain (tile month, tile all year,
+  # 30-degree zone, world), whatever is chosen.
+  rule:
+    mask_max_drop_points: 1
+    refinement_gain_points: 2
+    error_limit_pct: 10
+
 continuity:
   # Phase 2 fix 2 (stage `continuity`, after `counts`): S-NPP per NOAA-20 active cell and
   # fire power, per test region and calendar month. NOAA-20 data start in 2018 (partial
