@@ -265,6 +265,53 @@ confidence:
     gain_points: 2
     error_limit_pct: 10
 
+nodata:
+  # Phase 2 fix 7 (stage `nodata`, after qc): "no data" must never look like "no fire".
+  # Finds whole-day gaps (qc coverage table) and regional gaps (a satellite far below its
+  # partner in one 30-degree zone), tests gap filling on simulated outages, and writes the
+  # record's availability per zone and day plus an expected error per zone and month.
+  tile_deg: 10
+  zone_deg: 30
+  regional:
+    # partner used on a day = first one in the list that was fully working that day
+    partners:
+      Terra: [Aqua]
+      Aqua: [Terra]
+      S-NPP: [NOAA-20, MODIS]
+      NOAA-20: [S-NPP]
+    window_days: 31          # the usual ratio = rolling median over this many days
+    min_partner_cells: 40    # judged only when the partner sees at least this many burning cells in the zone
+    min_expected_cells: 20   # ... and the satellite was expected to see at least this many (small numbers are noise)
+    low_fraction: 0.25       # regional gap when the satellite sees under this share of the usual ratio
+  # Fill links tested: target <- substitute (D19 = the MODIS piece: merged to 2019, Aqua from 2020)
+  links:
+    - {target: S-NPP, substitute: NOAA-20, years: [2019, 2025]}
+    - {target: S-NPP, substitute: D19, years: [2012, 2025]}
+    - {target: MODIS, substitute: Aqua, years: [2003, 2019]}
+    - {target: MODIS, substitute: Terra, years: [2003, 2019]}
+  # The record's own satellite per period and the fill order when it is missing
+  record:
+    - {from: "2002-01-01", to: "2002-07-03", target: Terra, fill: []}
+    - {from: "2002-07-04", to: "2012-01-19", target: MODIS, fill: [Aqua, Terra]}
+    - {from: "2012-01-20", to: "2100-12-31", target: S-NPP, fill: [NOAA-20, D19]}
+  gap_buckets: [[1, 3], [4, 7], [8, 14], [15, 27]]   # every gap length tested equally often
+  replicates: 3
+  seed: 7
+  # PRE-REGISTERED RULE, fixed on 15 Oct 2026 before the first run. Simulated outages on days
+  # when target and substitute both worked, in the tested tiles of stage factors. Default for
+  # a gap is `scale` (month total x days in month / days with data). A fill method
+  # (substitute, or hybrid = substitute only where the tile has its own monthly factor) is
+  # adopted for a link only if its fire-weighted absolute error of month totals beats scale
+  # by more than gain_points for fire power, AND is not higher for burning cells, AND its
+  # global total error is within +-global_error_limit_pct for both. If both qualify, the lower
+  # fire power error wins (tie: hybrid, the more cautious). A zone-month whose expected error (from the same test, by gap
+  # length) exceeds month_error_limit_pct is withheld as "no data".
+  rule:
+    gain_points: 1
+    global_error_limit_pct: 5
+    month_error_limit_pct: 25
+    tile_limit_pct: 10
+
 continuity:
   # Phase 2 fix 2 (stage `continuity`, after `counts`): S-NPP per NOAA-20 active cell and
   # fire power, per test region and calendar month. NOAA-20 data start in 2018 (partial
