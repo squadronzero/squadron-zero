@@ -39,7 +39,7 @@ def tile_name(lat0: float, lon0: float, size: float) -> str:
     return f"{ns}{abs(int(lat0)):02d}{ew}{abs(int(lon0)):03d}"
 
 
-def monthly_tiles(settings: Settings, groups: dict, size: float, exclude) -> pd.DataFrame:
+def monthly_tiles(settings: Settings, groups: dict, size: float, exclude, drop_cells=None) -> pd.DataFrame:
     """Active cells, fire power and detections per tile, satellite group, year and month,
     with the excluded (outage) days left out. One partition at a time."""
     root = settings.celldays_dir
@@ -55,6 +55,8 @@ def monthly_tiles(settings: Settings, groups: dict, size: float, exclude) -> pd.
         d["acq_date"] = pd.to_datetime(d["acq_date"]).dt.normalize()
         if ex is not None:
             d = d[~d["acq_date"].isin(ex)]
+        if drop_cells is not None and len(drop_cells):
+            d = d[~d["cell_id"].isin(drop_cells)]        # D22: non-fire cells removed in every year
         for group, sats in groups.items():
             g = d[d["satellite"].isin(sats)]
             if g.empty:
@@ -152,7 +154,9 @@ def run_worldwide(settings: Settings) -> dict:
     sats = sorted({s for g in groups for s in GROUPS[g]})
     bad = bad_days(settings, sats) if cfg.get("exclude_gap_days", True) else None
 
-    m = monthly_tiles(settings, groups, size, bad)
+    from .static_mask import masked_cells
+    mask = masked_cells(settings) if (settings.raw.get("nonfire") or {}).get("mask_all_years", False) else None
+    m = monthly_tiles(settings, groups, size, bad, mask)
     if m.empty:
         return {"stage": "worldwide", "note": "no cell-days found"}
     out = settings.processed_dir / "counts"
@@ -210,13 +214,14 @@ def run_worldwide(settings: Settings) -> dict:
         return x[["region", "lat", "lon", "fire_cells_per_month", "score", "backward_error_pct"]]
 
     total_tiles = m["region"].nunique()
-    report = {"stage": "worldwide", "tile_deg": size, "tiles_with_fire": int(total_tiles),
+    report = {"stage": "worldwide", "tile_deg": size, "nonfire_mask_all_years": mask is not None, "tiles_with_fire": int(total_tiles),
               "tiles_tested": int(len(testable)),
               "fire_share_in_tested_tiles_pct": round(float(100 * weights.reindex(testable).sum() / weights.sum()), 2),
               "rule": rule,
               "d19": {"chosen": chosen19, "verdict": v19[0], "why": v19[1], "summary": sum19.to_dict("records")},
               "d21": {"chosen": "ratio_totals", "verdict": v21[0], "why": v21[1], "summary": sum21.to_dict("records")}}
     with pd.option_context("display.width", 220, "display.max_columns", 20, "display.max_rows", 100):
+        print(f"[worldwide] non-fire mask in every year (D22): {'on' if mask is not None else 'off'}", flush=True)
         print(f"[worldwide] {total_tiles} tiles of {size:g} degrees have fire; {len(testable)} have enough to test "
               f"(>= {min_ref:g} S-NPP burning cells a month on average), holding {report['fire_share_in_tested_tiles_pct']}% of all fire", flush=True)
         print(f"[worldwide] D19 burning cells, every tested tile:\n{sum19.to_string(index=False)}", flush=True)

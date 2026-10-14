@@ -201,6 +201,12 @@ worldwide:
     confirm_margin_points: 2
     error_limit_pct: 10
 
+nonfire:
+  # D22 (decided 14 Oct by its pre-registered rule in the factors run): remove the static
+  # non-fire cells (static_mask) in EVERY year, not only from unlabelled data, so gas flares
+  # and industry are treated the same before and after NASA's 2018 labelling change.
+  mask_all_years: true
+
 factors:
   # Stage `factors` (D21, decided 14 Oct): the ratio per place and calendar month for every
   # 10-degree tile with fire, for burning cells and fire power, on the D19 source pieces,

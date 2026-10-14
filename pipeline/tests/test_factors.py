@@ -75,3 +75,7 @@ def test_factors_end_to_end(tmp_path):
     assert 1.6 < a["k"].median() < 2.4                                        # MODIS sees half the fires
     assert (a["k_lo"] <= a["k"] + 1e-9).all() and (a["k"] <= a["k_hi"] + 1e-9).all()
     assert set(fac["fit_years"]) == {"2012-2015", "2016-2017"}                # each piece on all its years
+    # a borrowed factor must not look more certain than a measured one
+    own = fac[(fac["variable"] == "frp") & (fac["source"] == "own month")]["range_pct"].median()
+    borrowed = fac[(fac["variable"] == "frp") & (fac["source"] != "own month")]["range_pct"].median()
+    assert borrowed >= own

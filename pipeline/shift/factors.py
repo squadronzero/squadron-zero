@@ -137,13 +137,19 @@ class Cube:
             if borrow:
                 kz = (Rz + prior * np.nan_to_num(kg)[self.zone_gid]) / (Sz + prior)
                 kz_k = self.Z.T @ kz
+                self.last_level = np.where(S >= min_v, 0, 2)
+                self.last_zone_k = kz_k
                 return (R + prior * kz_k) / (S + prior)
             kz = np.where(Sz >= min_v, Rz / Sz, np.nan)
             kz_k = self.Z.T @ np.nan_to_num(kz, nan=0.0)
             kz_ok = self.Z.T @ (Sz >= min_v)
             k_all = np.where(S.sum(1) >= min_v, R.sum(1) / S.sum(1), np.nan)[:, None]
             k = np.where(S >= min_v, R / S, k_all)
+            # where each factor came from: 0 own month, 1 own all-year, 2 zone, 3 world
+            self.last_level = np.where(S >= min_v, 0, np.where(~np.isnan(k_all) & np.ones_like(S, bool), 1,
+                                       np.where(kz_ok > 0, 2, 3)))
             k = np.where(np.isnan(k), np.where(kz_ok > 0, kz_k, kg_k), k)
+            self.last_zone_k = np.where(kz_ok > 0, kz_k, kg_k)
             return k
 
     def predict(self, segments, ref, fit_years, test_years, smooth, borrow, prior, min_v) -> pd.DataFrame:
@@ -213,6 +219,7 @@ def bootstrap(cube: Cube, segments, ref, years, smooth, borrow, prior, min_v, n:
         base_w = np.zeros(len(cube.years))
         base_w[idx] = 1.0
         k = cube.fit(g, ref, base_w, smooth, borrow, prior, min_v)
+        level, kz = cube.last_level.copy(), cube.last_zone_k.copy()
         draws = []
         for _ in range(n):
             w = np.zeros(len(cube.years))
@@ -221,7 +228,24 @@ def bootstrap(cube: Cube, segments, ref, years, smooth, borrow, prior, min_v, n:
         draws = np.stack(draws)
         with np.errstate(all="ignore"):
             lo, hi = np.nanpercentile(draws, 2.5, axis=0), np.nanpercentile(draws, 97.5, axis=0)
-        res[f"{g} {y0}-{y1}"] = (k, lo, hi, span)
+            # A factor borrowed from the zone or the world is only as good as the guess that this
+            # place behaves like its zone. Resampling years cannot see that, so widen the range by
+            # how much tiles with their own factor differ from their zone (95% spread, log scale).
+            own = (level == 0) & (k > 0) & (kz > 0)
+            lr = np.where(own, np.log(k / kz), np.nan)
+            world_hw = np.nanpercentile(lr, 97.5) - np.nanpercentile(lr, 2.5) if np.isfinite(lr).sum() >= 20 else 1.0
+            zone_of_key = cube.Z.argmax(axis=0)
+            hw = np.full(len(cube.keys), world_hw / 2)
+            for z in range(cube.Z.shape[0]):
+                vals = lr[zone_of_key == z][np.isfinite(lr[zone_of_key == z])]
+                if len(vals) >= 20:
+                    hw[zone_of_key == z] = (np.percentile(vals, 97.5) - np.percentile(vals, 2.5)) / 2
+            a = np.log(np.where((hi > 0) & (lo > 0), hi / lo, 1.0)) / 2
+            half = np.sqrt(a ** 2 + hw[:, None] ** 2)
+            borrowed = level >= 1
+            lo = np.where(borrowed, k * np.exp(-half), lo)
+            hi = np.where(borrowed, k * np.exp(half), hi)
+        res[f"{g} {y0}-{y1}"] = (k, lo, hi, span, level)
     return res
 
 
@@ -302,12 +326,13 @@ def run_factors(settings: Settings) -> dict:
         c = cube(var, cur["mask"], cur["size"])
         bs = bootstrap(c, segments, ref, years, cur["smooth"], cur["borrow"], prior[var], min_v[var],
                        int(cfg.get("bootstrap_samples", 200)), int(cfg.get("seed", 26)))
-        for seg, (k, lo, hi, span_used) in bs.items():
+        for seg, (k, lo, hi, span_used, level) in bs.items():
             for i, key in c.keys.iterrows():
                 for mth in range(12):
                     rows.append({"segment": seg, "fit_years": f"{span_used[0]}-{span_used[-1]}", "tile": key["tile"],
                                  "lat": key["lat0"] + tile_deg / 2, "lon": key["lon0"] + tile_deg / 2, "size": key["size"],
-                                 "month": mth + 1, "variable": var, "k": k[i, mth], "k_lo": lo[i, mth], "k_hi": hi[i, mth]})
+                                 "month": mth + 1, "variable": var, "k": k[i, mth], "k_lo": lo[i, mth], "k_hi": hi[i, mth],
+                                 "source": ["own month", "own all-year", "zone", "world"][int(level[i, mth])]})
     fac = pd.DataFrame(rows)
     fac["range_pct"] = (100 * (fac["k_hi"] - fac["k_lo"]) / fac["k"]).round(1)
     fac["tested_tile"] = fac["tile"].isin(tiles)
@@ -323,6 +348,7 @@ def run_factors(settings: Settings) -> dict:
                               "final_backward_error_pct": cur_res["per_tile"]["backward_error_pct"].reindex(watch)}).round(2)
 
     frp_tiles = fac[(fac["variable"] == "frp")]
+    by_source = frp_tiles.groupby("source")["range_pct"].agg(["size", "median"]).round(1)
     report = {"stage": "factors", "chosen": cur, "fire_size_threshold_mw": round(threshold, 2) if threshold == threshold else None,
               "tiles_with_fire": int(fac["tile"].nunique()), "tiles_tested": int(len(tiles)),
               "masked_cells": int(len(mask)) if mask is not None else 0,
@@ -331,7 +357,8 @@ def run_factors(settings: Settings) -> dict:
               "steps": steps.to_dict("records"),
               "factor_rows": int(len(fac)),
               "median_range_pct_frp_tested": float(frp_tiles[frp_tiles["tested_tile"]]["range_pct"].median()),
-              "median_range_pct_frp_untested": float(frp_tiles[~frp_tiles["tested_tile"]]["range_pct"].median()) if (~frp_tiles["tested_tile"]).any() else None}
+              "median_range_pct_frp_untested": float(frp_tiles[~frp_tiles["tested_tile"]]["range_pct"].median()) if (~frp_tiles["tested_tile"]).any() else None,
+              "frp_factor_sources": by_source.reset_index().to_dict("records")}
     with pd.option_context("display.width", 220, "display.max_columns", 20, "display.max_rows", 60):
         print(f"[factors] {report['tiles_with_fire']} tiles with fire, {len(tiles)} tested; {report['masked_cells']} non-fire cells in the mask", flush=True)
         print("[factors] pre-registered sequence on fire power (each step kept only if the rule allows):\n"
@@ -344,4 +371,5 @@ def run_factors(settings: Settings) -> dict:
                   + watch_tbl.to_string(), flush=True)
         print(f"[factors] factor table: {len(fac)} rows (segment x tile x size x month x variable); median 95% range of the "
               f"fire power factor: tested tiles {report['median_range_pct_frp_tested']}%, thin tiles {report['median_range_pct_frp_untested']}%", flush=True)
+        print("[factors] where the fire power factors come from (rows, median 95% range %):\n" + by_source.to_string(), flush=True)
     return report
