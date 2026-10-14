@@ -136,11 +136,17 @@ def run_confscan(settings: Settings, years: list[int] | None = None, families: l
 
 # ---------------------------------------------------------------- stage confidence
 
-def _yearly_share(main: pd.DataFrame, allc: pd.DataFrame, var: str, by: list[str]) -> pd.DataFrame:
+def _yearly_share(main: pd.DataFrame, allc: pd.DataFrame, var: str, by: list[str],
+                  none_is_missing: bool = False) -> pd.DataFrame:
+    """Low-confidence share. With none_is_missing, a group that gained nothing at all from the
+    low-confidence folder counts as NOT SCANNED (NaN), not as 0%: confscan covers the yearly
+    files only, so 2026 (form downloads) has no low-confidence data and must not pull trends down."""
     a = main.groupby(by)[var].sum()
     b = allc.groupby(by)[var].sum()
     t = pd.DataFrame({"kept": a, "all": b}).fillna(0)
     t["low_share_pct"] = np.where(t["all"] > 0, 100 * (1 - t["kept"] / t["all"]), np.nan)
+    if none_is_missing:
+        t.loc[t["all"] <= t["kept"], "low_share_pct"] = np.nan
     return t.reset_index()
 
 
@@ -182,10 +188,11 @@ def run_confidence(settings: Settings) -> dict:
     # -------- 1. how much is "low", per satellite and year (fires only: D22 cells left out)
     key = ["group", "year"]
     fm, fa = m_main[~m_main["in_mask"]], m_all[~m_all["in_mask"]]
-    share = _yearly_share(fm, fa, "active_cells", key).rename(columns={"low_share_pct": "low_share_cells_pct"})
-    share_frp = _yearly_share(fm, fa, "frp_mw", key)[key + ["low_share_pct"]].rename(columns={"low_share_pct": "low_share_frp_pct"})
+    share = _yearly_share(fm, fa, "active_cells", key, True).rename(columns={"low_share_pct": "low_share_cells_pct"})
+    share_frp = _yearly_share(fm, fa, "frp_mw", key, True)[key + ["low_share_pct"]].rename(columns={"low_share_pct": "low_share_frp_pct"})
     share = share.merge(share_frp, on=key)[key + ["low_share_cells_pct", "low_share_frp_pct"]]
-    share = share[share["group"].isin(DIAG_GROUPS) & (share["year"] >= 2003)].round(2)
+    share = share[share["group"].isin(DIAG_GROUPS) & (share["year"] >= 2003)
+                  & share["low_share_cells_pct"].notna()].round(2)
     trend = {g: {"cells_pct_points_per_year": round(_slope(d["year"], d["low_share_cells_pct"]), 3),
                  "frp_pct_points_per_year": round(_slope(d["year"], d["low_share_frp_pct"]), 3),
                  "mean_cells_pct": round(float(d["low_share_cells_pct"].mean()), 2),

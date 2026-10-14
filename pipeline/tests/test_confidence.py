@@ -11,12 +11,13 @@ import zipfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 import pandas as pd
 import yaml
 
 from shift.aggregate import read_celldays, to_celldays, write_celldays
 from shift.config import DEFAULT_SETTINGS, load_settings
-from shift.confidence import low_dir, run_confidence, run_confscan
+from shift.confidence import _yearly_share, low_dir, run_confidence, run_confscan
 
 MODIS_HEADER = "latitude,longitude,brightness,scan,track,acq_date,acq_time,satellite,instrument,confidence,version,bright_t31,frp,daynight,type"
 VIIRS_HEADER = "latitude,longitude,bright_ti4,scan,track,acq_date,acq_time,satellite,instrument,confidence,version,bright_ti5,frp,daynight,type"
@@ -99,3 +100,13 @@ def test_confidence_picks_low_when_labelling_changes(tmp_path):
     assert rep["low_share_trend"]["S-NPP"]["cells_pct_points_per_year"] > 3  # S-NPP low share rises
     out = s.processed_dir / "counts"
     assert (out / "confidence_variants.csv").exists() and (out / "confidence_low_share_yearly.csv").exists()
+
+
+def test_year_without_low_data_is_not_scanned_not_zero():
+    """2026 has no low-confidence data (form downloads are not in confscan): it must be left
+    out of the share and trend, not reported as 0% (seen on Colab 14 Oct)."""
+    main = pd.DataFrame({"group": ["S-NPP"] * 3, "year": [2024, 2025, 2026], "active_cells": [90.0, 88.0, 50.0]})
+    allc = pd.DataFrame({"group": ["S-NPP"] * 3, "year": [2024, 2025, 2026], "active_cells": [100.0, 100.0, 50.0]})
+    t = _yearly_share(main, allc, "active_cells", ["group", "year"], True).set_index("year")["low_share_pct"]
+    assert t[2024] == pytest.approx(10.0) and t[2025] == pytest.approx(12.0)
+    assert np.isnan(t[2026])
