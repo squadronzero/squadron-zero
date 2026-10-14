@@ -13,6 +13,7 @@
     python -m shift.run --dataset global --stage sources     # Phase 2 fix 3: Aqua, Terra or both? (after counts)
     python -m shift.run --dataset global --stage selection   # Phase 2 fix 3b: six fair tests pick the MODIS source (D19)
     python -m shift.run --dataset global --stage frp         # Phase 2 fix 4: the intercept problem in fire power (D21)
+    python -m shift.run --dataset global --stage worldwide   # D19 and D21 re-tested on a 10-degree grid over the whole Earth
     python -m shift.run --settings path/to/other_settings.yaml
 
 Run from the `pipeline/` folder (or add it to PYTHONPATH).
@@ -34,6 +35,7 @@ from .ingest import run_ingest, write_report
 from .qc import run_qc
 from .scan import run_scan
 from .selection import run_selection
+from .tiles import run_worldwide
 
 STAGES = {
     "ingest": run_ingest,
@@ -45,7 +47,8 @@ STAGES = {
 # Stages that only run when asked for by name (downloads and checks).
 EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck": run_crosscheck,
                 "counts": run_counts, "continuity": run_continuity, "sources": run_sources,
-                "selection": run_selection, "frp": run_frp}
+                "selection": run_selection, "frp": run_frp,
+                "worldwide": run_worldwide}
 # What to print at the end of each stage (the full report is always saved as JSON).
 SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "qc": ["date_range", "days_by_status", "step_checks", "real_fires_in_mask_pct"],
@@ -54,7 +57,8 @@ SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "continuity": ["k_cells_per_region", "gapfill", "days_excluded"],
            "sources": ["summary", "lowest_regional_error", "days_excluded"],
            "selection": ["winner", "why", "fire_size_threshold_mw", "days_excluded"],
-           "frp": ["winner", "why", "days_excluded"]}
+           "frp": ["winner", "why", "days_excluded"],
+           "worldwide": ["tiles_with_fire", "tiles_tested", "fire_share_in_tested_tiles_pct"]}
 
 
 def main(argv: list[str] | None = None) -> None:

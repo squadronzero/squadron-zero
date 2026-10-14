@@ -182,6 +182,25 @@ frp:
     max_global_backward_error_pct: 10
     tie_margin_points: 2
 
+worldwide:
+  # Stage `worldwide` (after `counts`): the D19 and D21 tests repeated on a grid of tiles
+  # covering the whole Earth, so the choices are not judged on ten boxes alone. Each tile
+  # gets its own factors. Tiles with too little fire are listed but not scored.
+  reference: S-NPP
+  tile_deg: 10
+  min_ref_cells_per_month: 50        # average S-NPP burning cells a month to be tested
+  overlap_years: [2012, 2025]
+  backward_fit_years: [2016, 2025]
+  backward_test_years: [2012, 2015]
+  exclude_gap_days: true
+  # PRE-REGISTERED RULE, fixed on 14 Oct 2026 before the first run: a decision is CONFIRMED
+  # worldwide if the chosen option has the highest fire-weighted score over all tested tiles
+  # (score = mean of leave-one-year-out and backward category agreement), or is within
+  # confirm_margin_points of the best. Otherwise CHECK: the decision goes back to Squadron Zero.
+  rule:
+    confirm_margin_points: 2
+    error_limit_pct: 10
+
 continuity:
   # Phase 2 fix 2 (stage `continuity`, after `counts`): S-NPP per NOAA-20 active cell and
   # fire power, per test region and calendar month. NOAA-20 data start in 2018 (partial

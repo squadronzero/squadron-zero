@@ -13,7 +13,8 @@ Two things go wrong when that line is used to rebuild a record:
 Methods compared (each predicts a region-month VIIRS S-NPP fire power total from MODIS,
 with the D19 source pieces: merged MODIS to 2019, Aqua from 2020):
 
-  v1_equation     the v1 Florida line, unchanged, applied everywhere
+  v1_equation     the v1 Florida line, unchanged, applied everywhere to merged Terra + Aqua
+                  (the input it was fitted on), in every year
   ols_cellday     a straight line with intercept, refitted per region on paired cell-days
   origin_cellday  a line through zero (no intercept), per region, paired cell-days
   ratio_paired    total VIIRS / total MODIS fire power over paired cell-days, per region
@@ -154,10 +155,15 @@ def run_frp(settings: Settings) -> dict:
 
     stats = pair_stats(settings, groups, ref, years, bad)
 
+    # The v1 line was fitted on Terra + Aqua merged, so it is always applied to merged MODIS
+    # (its own input). Feeding it Aqua alone after 2019 would halve its input and be unfair.
+    v1_segments = [["MODIS", 1900, 2100]]
+
     def run(method, fit, test):
         if method == "ratio_totals":
             return predict(wf, segments, ref, fit, test, min_frp, [])
-        return predict_linear(wf, wc, stats, segments, ref, method, fit, test, v1)
+        segs = v1_segments if method == "v1_equation" else segments
+        return predict_linear(wf, wc, stats, segs, ref, method, fit, test, v1)
 
     scores, drifts, intercept_share = [], [], []
     for method in METHODS:
