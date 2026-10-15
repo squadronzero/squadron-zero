@@ -34,6 +34,7 @@ pipeline/
   shift/factors.py             D21 factors for every place on Earth, gap fixes and refinements
   shift/confidence.py          Fix 5: low-confidence cell-days (confscan) and the confidence asymmetry test
   shift/nodata.py              Fix 7: no-data mask: regional gaps, gap filling tested on simulated outages, availability per zone and day
+  shift/places.py              Fix 8: per-place choices (flare-tile mask, MODIS source per tile, nested), borrowed factors tested, confidence drift, spotlight region
   shift/run.py                 one command runs every stage
   shift/quickstart.py          2-minute demo on samples/florida_sample.zip
   tests/                       automated checks
@@ -90,6 +91,7 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 | confscan | FIRMS yearly world files | Low-confidence vegetation-fire detections only, as cell-days in their own folder (`celldays_low`); main record untouched | Phase 2 (fix 5) |
 | confidence | L2 global + `celldays_low` | Low-confidence share per satellite, year and tile; keeping low for MODIS, VIIRS or both scored against the current filter by a pre-registered rule | Phase 2 (fix 5) |
 | nodata | L2 global + qc coverage table | Regional gaps (a satellite far below its partner in one 30-degree zone); fill links (S-NPP <- NOAA-20, S-NPP <- D19 MODIS, MODIS <- Aqua or Terra) tested on simulated outages under a pre-registered rule; status per zone and day (primary, filled, no data) and per zone and month with an expected error | Phase 2 (fix 7) |
+| places | L2 global + static sources + counts + confidence outputs | Stronger non-fire mask in flare tiles; MODIS source per tile chosen on 2016-2025 and judged on 2012-2015; borrowed factors rebuilt without each tile and tested; confidence drift per tile; Bangladesh spotlight with a first harmonised calendar. Every choice under a pre-registered rule | Phase 2 (fix 8) |
 | harmonise | L2 + model | L3 harmonised record | Phase 2 |
 | validate | L3 + holdout years | metrics per region | Phase 2 |
 | calendar | L3 | climatology, anomalies, critical periods | Phase 3 |

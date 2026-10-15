@@ -318,6 +318,36 @@ nodata:
     month_error_limit_pct: 25
     tile_limit_pct: 10
 
+places:
+  # Phase 2 fix 8 (stage `places`, after factors and confidence): per-place choices, each under a
+  # rule fixed on 15 Oct 2026 BEFORE the first run. Same tested tiles, weights, D19 pieces,
+  # tests and fallback chain as stage factors.
+  # B. Stronger non-fire mask, applied only in FLARE TILES: tiles where the D22 cells hold at
+  #    least flare_share of the tile's MODIS burning cells (2012-2025). Steps in order: also
+  #    remove cells labelled non-fire in a single year; then also their 8 neighbouring cells.
+  #    Each kept (as D22 was) if the fire-weighted fire power score drops by no more than
+  #    mask_max_drop_points AND the share of tiles within +-error_limit_pct rises.
+  flare_share: 0.20
+  # A. MODIS source per tile (D19 or merged Terra + Aqua), NESTED so the choice cannot grade
+  #    itself: each tile picks on leave-one-year-out agreement over selection_years only;
+  #    every option is then judged on the backward test (fit 2016-2025, predict 2012-2015).
+  #    The per-tile choice replaces D19 everywhere only if its fire-weighted backward agreement
+  #    is more than source_gain_points higher AND its share of tiles within +-error_limit_pct
+  #    is not lower.
+  selection_years: [2016, 2025]
+  # C. Borrowed factors (own all-year, zone, world) are tested by rebuilding every tested
+  #    tile's factor WITHOUT the tile and predicting 2012-2015 from 2016-2019. No decision:
+  #    the measured errors set the fix 9 uncertainty for thin tiles.
+  # D. Confidence drift (fix 5): extra uncertainty per tile = |gap trend| x extrapolation_years
+  #    (middle of the 2012-2019 fit piece to the middle of 2002-2011).
+  extrapolation_years: 9
+  # E. Spotlight region (a key of regions.test): own backward test and a first calendar.
+  spotlight: bangladesh
+  rule:
+    mask_max_drop_points: 1
+    source_gain_points: 2
+    error_limit_pct: 10
+
 continuity:
   # Phase 2 fix 2 (stage `continuity`, after `counts`): S-NPP per NOAA-20 active cell and
   # fire power, per test region and calendar month. NOAA-20 data start in 2018 (partial

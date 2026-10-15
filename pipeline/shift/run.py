@@ -18,6 +18,7 @@
     python -m shift.run --dataset global --stage confscan    # Phase 2 fix 5: low-confidence fire cell-days, own folder (download)
     python -m shift.run --dataset global --stage confidence  # Phase 2 fix 5: confidence asymmetry, variants scored
     python -m shift.run --dataset global --stage nodata      # Phase 2 fix 7: no-data mask, regional gaps, tested gap filling
+    python -m shift.run --dataset global --stage places      # Phase 2 fix 8: per-place choices, borrowed factors tested, spotlight
     python -m shift.run --settings path/to/other_settings.yaml
 
 Run from the `pipeline/` folder (or add it to PYTHONPATH).
@@ -43,6 +44,7 @@ from .tiles import run_worldwide
 from .factors import run_factors
 from .confidence import run_confidence, run_confscan
 from .nodata import run_nodata
+from .places import run_places
 
 STAGES = {
     "ingest": run_ingest,
@@ -57,7 +59,7 @@ EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck"
                 "selection": run_selection, "frp": run_frp,
                 "worldwide": run_worldwide, "factors": run_factors,
                 "confscan": run_confscan, "confidence": run_confidence,
-                "nodata": run_nodata}
+                "nodata": run_nodata, "places": run_places}
 # What to print at the end of each stage (the full report is always saved as JSON).
 SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "qc": ["date_range", "days_by_status", "step_checks", "real_fires_in_mask_pct"],
@@ -73,7 +75,9 @@ SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "confidence": ["winner", "why", "low_share_trend", "fire_weighted_mean_gap_pct_points",
                           "fire_weighted_abs_gap_trend_pct_points_per_year"],
            "nodata": ["chosen", "links", "regional_gaps", "zone_days_without_own_satellite",
-                      "zone_days_left_empty", "whole_world_empty_days", "months_by_status"]}
+                      "zone_days_left_empty", "whole_world_empty_days", "months_by_status"],
+           "places": ["mask_chosen", "source_choice", "source_why", "source_picks_tested_tiles",
+                      "borrowed_factor_test", "confidence_drift_tiles_over_5pct"]}
 
 
 def main(argv: list[str] | None = None) -> None:
