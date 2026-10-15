@@ -353,12 +353,33 @@ places:
     source_gain_points: 2
     error_limit_pct: 10
 
+resolution:
+  # Phase 2 fix 9b (stage `resolution`, after factors): 10-degree tile factors vs 2.5-degree
+  # cell factors (own, or pulled towards their 10-degree tile), all judged on 2.5-degree cells
+  # with at least min_ref_cells_per_month S-NPP burning cells a month, same tests as factors.
+  fine_deg: 2.5
+  min_ref_cells_per_month: 10
+  # PRE-REGISTERED RULE, fixed 15 Oct 2026 before the first run: the best fine variant
+  # replaces the 10-degree factor only if (1) its score (mean of fire-weighted burning-cell and
+  # fire-power scores at fine scale) is higher by more than gain_points, (2) its mean absolute
+  # 2012-step gap over the D18 regions is lower, (3) its global backward error is within
+  # +-error_limit_pct for both variables. Stage harmonise then uses it automatically.
+  rule:
+    gain_points: 1
+    error_limit_pct: 10
+
+export:
+  # Phase 3 (stage `export`, after harmonise): static files for the website (D5).
+  out_subdir: site_data
+  max_site_mb: 900
+
 harmonise:
   # Phase 2 fix 9 (stage `harmonise`, after factors is rerun with D26 and D25): the harmonised
   # record L3, one row per 0.25-degree cell and day with fire, on the S-NPP scale, with the
   # source of every value, plus the 95% range of every factor.
   resolution_deg: 0.25
   out_subdir: l3
+  use_fine_factors: auto     # auto = use stage resolution's fine table when its rule adopted it
   # GATE, fixed 15 Oct 2026 before the first run: the global 2012 step (mean 2013-2015 / mean
   # 2009-2011) of the harmonised record is within +-step_tolerance_pct of the step MODIS alone
   # shows, for burning cells and fire power.

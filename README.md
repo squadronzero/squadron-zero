@@ -35,6 +35,8 @@ pipeline/
   shift/confidence.py          Fix 5: low-confidence cell-days (confscan) and the confidence asymmetry test
   shift/nodata.py              Fix 7: no-data mask: regional gaps, gap filling tested on simulated outages, availability per zone and day
   shift/harmonise.py           Fix 9: the harmonised record L3 (0.25 deg, daily, S-NPP scale) with sources, uncertainty, 2012 gate and era-fair anomaly rule
+  shift/resolution.py          Fix 9b: 10-degree vs 2.5-degree factors judged at fine scale, regional 2012 steps, pre-registered rule
+  shift/export.py              Phase 3: static website files (daily per 1-degree cell, monthly 0.25-degree map, availability, uncertainty, Not-a-fire layer, validation) + site_data.zip
   shift/places.py              Fix 8: per-place choices (flare-tile mask, MODIS source per tile, nested), borrowed factors tested, confidence drift, spotlight region
   shift/run.py                 one command runs every stage
   shift/quickstart.py          2-minute demo on samples/florida_sample.zip

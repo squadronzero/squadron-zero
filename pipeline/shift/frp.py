@@ -179,7 +179,7 @@ def run_frp(settings: Settings) -> dict:
             if "from_intercept" in lo:
                 share = lo.groupby("region")[["from_intercept", "pred"]].sum()
                 intercept_share.append((100 * share["from_intercept"] / share["pred"]).round(1).rename(method))
-    scores = pd.concat(scores, ignore_index=True)
+    scores = pd.concat([x for x in scores if len(x) and not x.isna().all().all()] or scores, ignore_index=True)
     drifts = pd.concat(drifts, ignore_index=True)
     ishare = pd.concat(intercept_share, axis=1) if intercept_share else pd.DataFrame()
 

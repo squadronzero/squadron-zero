@@ -18,6 +18,8 @@
     python -m shift.run --dataset global --stage confscan    # Phase 2 fix 5: low-confidence fire cell-days, own folder (download)
     python -m shift.run --dataset global --stage confidence  # Phase 2 fix 5: confidence asymmetry, variants scored
     python -m shift.run --dataset global --stage nodata      # Phase 2 fix 7: no-data mask, regional gaps, tested gap filling
+    python -m shift.run --dataset global --stage resolution  # Phase 2 fix 9b: 10-degree vs 2.5-degree factors, judged at fine scale
+    python -m shift.run --dataset global --stage export      # Phase 3: static files for the website (D5) + site_data.zip
     python -m shift.run --dataset global --stage harmonise   # Phase 2 fix 9: the harmonised record L3, 2012 gate, era-fair anomaly rule
     python -m shift.run --dataset global --stage places      # Phase 2 fix 8: per-place choices, borrowed factors tested, spotlight
     python -m shift.run --settings path/to/other_settings.yaml
@@ -47,6 +49,8 @@ from .confidence import run_confidence, run_confscan
 from .nodata import run_nodata
 from .places import run_places
 from .harmonise import run_harmonise
+from .resolution import run_resolution
+from .export import run_export
 
 STAGES = {
     "ingest": run_ingest,
@@ -62,7 +66,7 @@ EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck"
                 "worldwide": run_worldwide, "factors": run_factors,
                 "confscan": run_confscan, "confidence": run_confidence,
                 "nodata": run_nodata, "places": run_places,
-                "harmonise": run_harmonise}
+                "harmonise": run_harmonise, "resolution": run_resolution, "export": run_export}
 # What to print at the end of each stage (the full report is always saved as JSON).
 SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "qc": ["date_range", "days_by_status", "step_checks", "real_fires_in_mask_pct"],
@@ -79,7 +83,9 @@ SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
                           "fire_weighted_abs_gap_trend_pct_points_per_year"],
            "nodata": ["chosen", "links", "regional_gaps", "zone_days_without_own_satellite",
                       "zone_days_left_empty", "whole_world_empty_days", "months_by_status"],
-           "harmonise": ["rows", "rows_by_source", "gate_2012_step", "uncertainty_median_range_pct", "anomaly_rule"],
+           "resolution": ["chosen", "adopted", "why", "region_step_gap_pct"],
+           "export": ["files", "size_mb", "zip_mb", "largest_file", "fits_github_pages", "notfire_cells", "zip_path"],
+           "harmonise": ["factor_resolution_deg", "rows", "rows_by_source", "gate_2012_step", "uncertainty_median_range_pct", "anomaly_rule"],
            "places": ["mask_chosen", "source_choice", "source_why", "source_picks_tested_tiles",
                       "borrowed_factor_test", "confidence_drift_tiles_over_5pct"]}
 

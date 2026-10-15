@@ -70,6 +70,7 @@ class Table:
     for tiles the table does not list."""
 
     def __init__(self, df: pd.DataFrame, deg: float):
+        self.deg = deg
         nt = int(round(180 / deg)) * int(round(360 / deg))
         a = np.full((nt, 12), np.nan)
         if len(df):
@@ -79,24 +80,44 @@ class Table:
         fb = np.where(np.isfinite(fb), fb, 1.0)
         self.a = np.where(np.isfinite(a) & (a > 0), a, fb[None, :])
 
-    def __call__(self, tkey: np.ndarray, month: np.ndarray) -> np.ndarray:
-        return self.a[tkey, month - 1]
+    def __call__(self, lat, lon, month: np.ndarray) -> np.ndarray:
+        return self.a[tile_key(lat, lon, self.deg), month - 1]
 
 
-def load_tables(settings: Settings, tile_deg: float) -> dict:
-    """Factor tables: MODIS -> S-NPP per D19 piece (stage factors) and the fill links (nodata)."""
+def factor_source(settings: Settings) -> tuple:
+    """Which MODIS -> S-NPP factor table the record uses: the fine table from stage resolution
+    when its pre-registered rule adopted it (fix 9b), else the 10-degree table from stage factors.
+    Returns (path, degrees, measured half-widths for borrowed levels or None)."""
+    import json
+    fcfg = settings.raw.get("factors") or {}
+    coarse = (settings.processed_dir / "counts" / "factors_world.parquet", float(fcfg.get("tile_deg", 10)), None)
+    if (settings.raw.get("harmonise") or {}).get("use_fine_factors", "auto") is False:
+        return coarse
+    rp = settings.processed_dir / "counts" / "resolution_choice.json"
+    fp = settings.processed_dir / "counts" / "factors_world_fine.parquet"
+    if not (rp.exists() and fp.exists()):
+        return coarse
+    rep = json.loads(rp.read_text())
+    if not rep.get("adopted"):
+        return coarse
+    return fp, float(rep.get("fine_deg", 2.5)), rep.get("measured_half_width_95_log")
+
+
+def load_tables(settings: Settings, fill_deg: float, factor_path=None, factor_deg: float | None = None) -> dict:
+    """Factor tables: MODIS -> S-NPP per D19 piece (stage factors or resolution) and the fill
+    links (stage nodata, on 10-degree tiles)."""
     out = {}
-    fw = settings.processed_dir / "counts" / "factors_world.parquet"
+    fw = factor_path or settings.processed_dir / "counts" / "factors_world.parquet"
     if fw.exists():
         f = pd.read_parquet(fw)
         f = f[f["size"].astype(str) == "all"] if "size" in f else f
         for (seg, var), g in f.groupby(["segment", "variable"]):
-            out[("factor", seg, var)] = Table(g, tile_deg)
+            out[("factor", seg, var)] = Table(g, factor_deg or fill_deg)
     ff = settings.processed_dir / "nodata" / "fill_factors.parquet"
     if ff.exists():
         f = pd.read_parquet(ff)
         for (link, seg, var), g in f.groupby(["link", "segment", "variable"]):
-            out[("fill", link, seg, var)] = Table(g, tile_deg)
+            out[("fill", link, seg, var)] = Table(g, fill_deg)
     return out
 
 
@@ -149,8 +170,7 @@ def harmonise_month(d: pd.DataFrame, status, target, tables: dict, segments, til
         g = group_frame(d[mask_fn], group)
         if g.empty:
             return
-        tk = tile_key(g["cell_lat"], g["cell_lon"], tile_deg)
-        kc, kf = k_cells(tk, g), k_frp(tk, g)
+        kc, kf = k_cells(g), k_frp(g)
         parts.append(pd.DataFrame({"day": g["day"].to_numpy(), "cell_lat": g["cell_lat"].to_numpy(),
                                    "cell_lon": g["cell_lon"].to_numpy(), "cells_h": kc,
                                    "frp_h": g["frp_sum_mw"].to_numpy(float) * kf, "src": src}))
@@ -158,16 +178,19 @@ def harmonise_month(d: pd.DataFrame, status, target, tables: dict, segments, til
     year = int(d["year"].iloc[0])
     month = int(d["month"].iloc[0])
     mvec = lambda g: np.full(len(g), month)  # noqa: E731
-    one = lambda tk, g: np.ones(len(g))  # noqa: E731
+    one = lambda g: np.ones(len(g))  # noqa: E731
+
+    def look(t):
+        return lambda g: t(g["cell_lat"].to_numpy(), g["cell_lon"].to_numpy(), mvec(g))
 
     def fac(seg, var):
         t = tables.get(("factor", seg, var))
-        return (lambda tk, g: t(tk, mvec(g))) if t is not None else one
+        return look(t) if t is not None else one
 
     def fill(link, seg, var, then=None):
         t = tables.get(("fill", link, seg, var))
-        f = (lambda tk, g: t(tk, mvec(g))) if t is not None else one
-        return (lambda tk, g: f(tk, g) * then(tk, g)) if then is not None else f
+        f = look(t) if t is not None else one
+        return (lambda g: f(g) * then(g)) if then is not None else f
 
     _, mseg = segment_for(min(year, 2011), segments)          # the MODIS-era piece
     dg, dseg = segment_for(year, segments)                      # the D19 piece for this year
@@ -217,11 +240,11 @@ def region_sums(lat, lon, values: dict, regions: dict) -> dict:
     return out
 
 
-def uncertainty_table(settings: Settings, tile_deg: float) -> pd.DataFrame:
+def uncertainty_table(settings: Settings, factor_path=None, measured: dict | None = None) -> pd.DataFrame:
     """95% range of each factor (log half-width): the bootstrap range from stage factors, at
     least the honestly measured range for borrowed factors (stage places, part C), plus the
     confidence drift per tile (places, part D) for the MODIS-era piece."""
-    fw = settings.processed_dir / "counts" / "factors_world.parquet"
+    fw = factor_path or settings.processed_dir / "counts" / "factors_world.parquet"
     if not fw.exists():
         return pd.DataFrame()
     f = pd.read_parquet(fw)
@@ -230,7 +253,12 @@ def uncertainty_table(settings: Settings, tile_deg: float) -> pd.DataFrame:
         hw = np.log(np.where((f["k_lo"] > 0) & (f["k_hi"] > 0), f["k_hi"] / f["k_lo"], np.nan)) / 2
     f = f.assign(hw95_log=hw)
     bt = settings.processed_dir / "places" / "borrowed_factor_test.csv"
-    if bt.exists():
+    if measured:                             # fine factors: borrowed levels measured by stage resolution
+        for src, v in measured.items():
+            if v is not None and np.isfinite(v):
+                m = f["source"] == src
+                f.loc[m, "hw95_log"] = np.fmax(f.loc[m, "hw95_log"], v)
+    elif bt.exists():
         b = pd.read_csv(bt).set_index("level")["half_width_95_log"]
         meas = {"own all-year": b.get("own all-year"), "zone": b.get("zone (without the tile)"),
                 "world": b.get("world (without the tile)")}
@@ -325,7 +353,9 @@ def run_harmonise(settings: Settings) -> dict:
     start, end = zdates.min().normalize(), zdates.max().normalize()
     nd = (end - start).days + 1
     status, target = status_arrays(settings, start, nd, zone_deg)
-    tables = load_tables(settings, tile_deg)
+    fpath, fdeg, measured = factor_source(settings)
+    tables = load_tables(settings, tile_deg, fpath, fdeg)
+    print(f"[harmonise] MODIS -> S-NPP factors: {fpath.name} ({fdeg:g}-degree cells)", flush=True)
     _, mseg0 = segment_for(2011, segments)
     missing = [k for k in (("factor", mseg0, "cells"), ("factor", mseg0, "frp")) if k not in tables]
     if missing:
@@ -409,13 +439,13 @@ def run_harmonise(settings: Settings) -> dict:
     glob = steps[steps["region"] == "global"].iloc[0] if (len(steps) and (steps["region"] == "global").any()) else None
     gate_pass = bool(glob is not None and abs(glob["cells_gap_pct"]) <= tol and abs(glob["frp_gap_pct"]) <= tol)
 
-    unc = uncertainty_table(settings, tile_deg)
+    unc = uncertainty_table(settings, fpath, measured)
     if len(unc):
         unc.to_parquet(out_dir / "l3_uncertainty.parquet", index=False)
     anom = anomaly_test(settings, tile_deg, zone_deg, cfg.get("anomaly_rule") or {})
 
     gy = yt[yt["region"] == "global"].set_index("year")
-    report = {"stage": "harmonise", "resolution_deg": res25, "rows": int(rows_written),
+    report = {"stage": "harmonise", "resolution_deg": res25, "factor_resolution_deg": fdeg, "rows": int(rows_written),
               "months": len(months), "rows_by_source": src_counts,
               "gate_2012_step": {"pass": gate_pass, "tolerance_pct": tol,
                                  "global": None if glob is None else {k: glob[k] for k in glob.index if k != "region"}},

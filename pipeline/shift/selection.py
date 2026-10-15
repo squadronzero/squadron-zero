@@ -285,7 +285,7 @@ def run_selection(settings: Settings) -> dict:
             if test == "leave_one_year_out" and len(p):
                 drifts.append(drift(p, []).assign(candidate=name))
                 preds.append(p.assign(candidate=name))
-    scores = pd.concat(scores, ignore_index=True)
+    scores = pd.concat([x for x in scores if len(x) and not x.isna().all().all()] or scores, ignore_index=True)
     drifts = pd.concat(drifts, ignore_index=True) if drifts else pd.DataFrame(columns=["region", "candidate", "drift_pct_per_year"])
 
     # Summary per candidate and the pre-registered choice
