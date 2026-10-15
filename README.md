@@ -142,3 +142,10 @@ team's. Numbers come only from tested code. Full details: `docs/AI_USE.md`.
 ## Licence
 
 Apache License 2.0 (see `LICENSE`).
+
+## Website
+
+`web/` holds the SHIFT website (React + MapLibre, static files only). The pipeline's `export` stage
+writes `site_data.zip`; it is published as the GitHub release `site-data`, and the workflow
+`Website` (`.github/workflows/pages.yml`) downloads it, builds the site and publishes it on GitHub
+Pages. See `web/README.md` for running it locally or offline.
