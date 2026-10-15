@@ -3,7 +3,7 @@
 Two fire tiles (Florida, African savanna). Fire varies a lot from day to day, so scaling a
 month up from the days that have data is a poor guess, while a second VIIRS satellite flying
 the same orbit is a good one. Holes put in on purpose:
-  * S-NPP silent 1-25 Jun 2020 (whole world), NOAA-20 fine     -> filled from NOAA-20
+  * S-NPP silent all of Jun 2020 (whole world), NOAA-20 fine    -> filled from NOAA-20 (a full month)
   * S-NPP AND NOAA-20 silent 10-14 Mar 2021, Aqua fine           -> filled from the D19 piece (if adopted) or no data
   * S-NPP missing over Florida only, 10-12 Sep 2019 (coverage table says "ok") -> found as a regional gap
 """
@@ -13,7 +13,7 @@ import yaml
 
 from shift.aggregate import to_celldays, write_celldays
 from shift.config import DEFAULT_SETTINGS, load_settings
-from shift.nodata import Space, bucket_of, decide, fit_k, run_nodata
+from shift.nodata import Space, bucket_of, decide, fit_k, regional_gaps, run_nodata
 
 SATS = {"S-NPP": ("VIIRS", 1.0), "NOAA-20": ("VIIRS", 0.95), "Aqua": ("MODIS", 0.5), "Terra": ("MODIS", 0.4)}
 
@@ -37,7 +37,7 @@ def _settings(tmp_path):
 def _world(s):
     rng = np.random.default_rng(70)
     days = pd.date_range("2018-01-01", "2021-12-31")
-    snpp_off = set(pd.date_range("2020-06-01", "2020-06-25")) | set(pd.date_range("2021-03-10", "2021-03-14"))
+    snpp_off = set(pd.date_range("2020-06-01", "2020-06-30")) | set(pd.date_range("2021-03-10", "2021-03-14"))
     n20_off = set(pd.date_range("2021-03-10", "2021-03-14"))
     fl_off = set(pd.date_range("2019-09-10", "2019-09-12"))
     rows = []
@@ -78,7 +78,7 @@ def test_nodata_end_to_end(tmp_path):
     # regional gap: S-NPP missing over Florida while the coverage table said "ok"
     reg = pd.read_csv(out / "regional_gaps.csv")
     fl = reg[(reg["satellite"] == "S-NPP") & (reg["zone"] == "N00W090")]
-    assert {"2019-09-10", "2019-09-11", "2019-09-12"} <= set(fl["date"])
+    assert {"2019-09-10", "2019-09-11", "2019-09-12"} <= set(fl[fl["kind"] == "data loss"]["date"])
     assert not (reg[reg["zone"] == "N00E000"]["date"].isin(["2019-09-10", "2019-09-11", "2019-09-12"])).any()
 
     # the NOAA-20 fill beats scaling on simulated outages and is adopted by the rule
@@ -96,11 +96,14 @@ def test_nodata_end_to_end(tmp_path):
         assert both_off == "no data"
     else:
         assert both_off == "filled: D19"
-        assert rep["zone_days_left_empty"] == 0
+        assert rep["zone_days_left_empty"] == 2                     # only the cut-off last day, in both zones
 
     mt = pd.read_parquet(out / "zone_month_status.parquet")
     jun = mt[(mt["zone"] == "N00W090") & (mt["year"] == 2020) & (mt["month"] == 6)].iloc[0]
-    assert jun["filled"] == 25 and jun["primary"] == 5 and jun["month_status"] == "filled"
+    assert jun["filled"] == 30 and jun["primary"] == 0 and jun["month_status"] == "filled"
+    assert 0 < jun["expected_error_pct"] < 25                        # a whole month filled still has a finite error
+    assert st[("2021-12-31", "N00E000")] == "no data"                # newest day of a download is cut off
+    assert rep["last_days_dropped"] == 1
     full = mt[(mt["zone"] == "N00E000") & (mt["year"] == 2018) & (mt["month"] == 2)].iloc[0]
     assert full["month_status"] == "complete" and full["expected_error_pct"] == 0
 
@@ -137,3 +140,22 @@ def test_rule_needs_a_real_gain():
     assert decide(sc(19.5, 8.0), rule)[0] == "scale"          # gain under 1 point
     assert decide(sc(10.0, 16.0), rule)[0] == "scale"         # worse for burning cells
     assert decide(sc(10.0, 8.0, glob=7.0), rule)[0] == "scale"  # biased overall
+
+
+def test_weather_is_not_a_data_loss():
+    """One zone at 20% of the usual ratio is weather; near-total loss, or many zones on one
+    day, is data loss (D25)."""
+    nz, nd = 6, 60
+    rng = np.random.default_rng(3)
+    b = rng.integers(200, 300, size=(nz, nd)).astype(float)
+    a = b.copy()
+    a[0, 30] = 0.20 * b[0, 30]                 # moderate, one zone: weather
+    a[1, 40] = 0.02 * b[1, 40]                 # near-total: data loss
+    a[:4, 50] = 0.20 * b[:4, 50]               # moderate but 4 zones the same day: data loss
+    ok = {g: np.ones(nd, bool) for g in ["Terra", "Aqua", "MODIS", "S-NPP", "NOAA-20"]}
+    Zc = {g: b for g in ["Terra", "Aqua", "MODIS", "NOAA-20"]}
+    Zc["S-NPP"] = a
+    bad, rows = regional_gaps(Zc, ok, {"S-NPP": ["NOAA-20"]}, 31, 40, 0.25, 20, 0.10, 3)
+    assert not bad["S-NPP"][0, 30] and bad["S-NPP"][1, 40] and bad["S-NPP"][:4, 50].all()
+    kinds = {(r.zone, r.day): r.kind for r in rows.itertuples()}
+    assert kinds[(0, 30)] == "weather" and kinds[(1, 40)] == "data loss" and kinds[(2, 50)] == "data loss"

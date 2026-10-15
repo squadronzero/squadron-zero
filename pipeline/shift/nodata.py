@@ -136,13 +136,20 @@ def ok_days(cov: pd.DataFrame, start: pd.Timestamp, ndays: int) -> dict:
 # ---------------------------------------------------------------- step 2: regional gaps
 
 def regional_gaps(Zc: dict, ok: dict, partners: dict, window: int, min_partner: float,
-                  low_fraction: float, min_expected: float = 0.0) -> tuple[dict, pd.DataFrame]:
+                  low_fraction: float, min_expected: float = 0.0, severe_fraction: float = 0.0,
+                  min_zones: int = 10 ** 6) -> tuple[dict, pd.DataFrame]:
     """Zone-days when a satellite saw far less fire than its partner says it should.
     Zc: burning cells per group, zone and day. The partner used on a day is the first one in
     the list that was fully working that day. A zone-day is judged only when the partner saw at
     least `min_partner` burning cells AND the satellite was expected to see at least
     `min_expected` (so a handful of fires seen by one satellite and not the other is noise,
-    not a data gap)."""
+    not a data gap).
+
+    D25 (15 Oct, from the first global run): a shortfall under `low_fraction` is only a DATA
+    LOSS when it is near-total (under `severe_fraction` of what was expected) or when the same
+    satellite falls short in at least `min_zones` zones on the same day. A moderate shortfall in
+    one zone is the normal difference between two looks a few hours apart (cloud moves, fires
+    start and stop): it is kept in the file as kind "weather" and not treated as a gap."""
     nz, nd = next(iter(Zc.values())).shape
     bad = {g: np.zeros((nz, nd), bool) for g in GRP}
     rows = []
@@ -158,12 +165,17 @@ def regional_gaps(Zc: dict, ok: dict, partners: dict, window: int, min_partner: 
             expected = np.where(np.isfinite(med), med, 0.0) * b
             f = (valid & np.isfinite(med) & (med > 0) & (expected >= min_expected)
                  & (a < low_fraction * expected) & (chosen == i)[None, :])
-            bad[sat] |= f
+            if not f.any():
+                continue
+            many = f.sum(axis=0) >= min_zones                         # same satellite, same day, many zones
+            loss = f & ((a < severe_fraction * expected) | many[None, :])
+            bad[sat] |= loss
             for z, d in zip(*np.nonzero(f)):
                 rows.append({"satellite": sat, "partner": p, "zone": int(z), "day": int(d),
-                             "cells": int(a[z, d]), "expected": round(float(med[z, d] * b[z, d]), 1)})
+                             "cells": int(a[z, d]), "expected": round(float(med[z, d] * b[z, d]), 1),
+                             "kind": "data loss" if loss[z, d] else "weather"})
     bad["MODIS"] = bad["Terra"] | bad["Aqua"]
-    return bad, pd.DataFrame(rows, columns=["satellite", "partner", "zone", "day", "cells", "expected"])
+    return bad, pd.DataFrame(rows, columns=["satellite", "partner", "zone", "day", "cells", "expected", "kind"])
 
 
 # ---------------------------------------------------------------- step 3: fill links, tested
@@ -376,6 +388,12 @@ def run_nodata(settings: Settings) -> dict:
           "this prints nothing for several minutes", flush=True)
     A = daily_tiles(settings, space, start, nd, mask)
     ok = ok_days(cov, start, nd)
+    # The newest day of a form download is cut off at the time NASA processed the request, so
+    # it is never complete: the last `drop_last_days` day(s) of the record count as no data.
+    n_drop = int(cfg.get("drop_last_days", 1))
+    if n_drop > 0:
+        for sat in SATS + ["MODIS"]:
+            ok[sat][nd - n_drop:] = False
 
     # ---- step 2: regional gaps
     reg = cfg.get("regional") or {}
@@ -384,7 +402,8 @@ def run_nodata(settings: Settings) -> dict:
                 {"Terra": ["Aqua"], "Aqua": ["Terra"], "S-NPP": ["NOAA-20", "MODIS"], "NOAA-20": ["S-NPP"]}).items()}
     bad, flags = regional_gaps(Zc, ok, partners, int(reg.get("window_days", 31)),
                                float(reg.get("min_partner_cells", 40)), float(reg.get("low_fraction", 0.25)),
-                               float(reg.get("min_expected_cells", 20)))
+                               float(reg.get("min_expected_cells", 20)), float(reg.get("severe_fraction", 0.10)),
+                               int(reg.get("min_zones_same_day", 3)))
     usable = {g: ok[g][None, :] & ~bad[g] for g in GRP}          # zone x day
 
     # ---- step 3: links, tested under the rule
@@ -464,13 +483,22 @@ def run_nodata(settings: Settings) -> dict:
     zd_fire = zd[zd["zone"].isin(znames[fire_z])]
 
     # month table with expected error from the test
-    def err_lookup(link, meth, n):
+    def err_lookup(link, meth, n, extrapolate=False):
+        """Expected fire power error of a month total with n days filled (or scaled), from the
+        simulated outages. Longer than the longest tested gap: a FILL is extrapolated in
+        proportion to the days filled (substitution error grows with the share of the month it
+        covers); SCALING a month from almost nothing is not trusted (inf)."""
         if bys.empty:
             return np.nan
         b = bucket_of(n, buckets)
+        sel = (bys["link"] == link) & (bys["method"] == meth) & (bys["variable"] == "frp")
         if b >= len(buckets):
-            return np.inf
-        x = bys[(bys["link"] == link) & (bys["method"] == meth) & (bys["variable"] == "frp") & (bys["bucket"] == b)]
+            if not extrapolate:
+                return np.inf
+            lo, hi = buckets[-1]
+            x = bys[sel & (bys["bucket"] == len(buckets) - 1)]
+            return float(x["abs_error_pct"].iloc[0]) * n / ((lo + hi) / 2) if len(x) else np.nan
+        x = bys[sel & (bys["bucket"] == b)]
         return float(x["abs_error_pct"].iloc[0]) if len(x) else np.nan
 
     # scale errors depend only on how much the target varies from day to day; a target with no
@@ -491,14 +519,18 @@ def run_nodata(settings: Settings) -> dict:
         if r.filled:
             src = r.fill_source.split(", ")[0]
             ln = f"{r.target} <- {src}"
-            a = err_lookup(ln, chosen.get(ln, "scale"), int(r.filled))
+            a = err_lookup(ln, chosen.get(ln, "scale"), int(r.filled), extrapolate=True)
         b = 0.0
         if r.no_data:
             b = np.inf if r.no_data >= r.days else err_lookup(scale_link.get(r.target, any_link), "scale", int(r.no_data))
-        exp.append(float(np.sqrt(np.nan_to_num(a) ** 2 + np.nan_to_num(b, nan=0.0) ** 2)) if np.isfinite(b) else np.inf)
+        a = 0.0 if not np.isfinite(a) else a
+        b = 0.0 if (b is None or np.isnan(b)) else b
+        exp.append(float(np.hypot(a, b)) if np.isfinite(b) else np.inf)
     mt["expected_error_pct"] = np.round(exp, 2)
     mt["month_status"] = np.select(
-        [mt["no_data"] + mt["filled"] == 0, (mt["no_data"] == 0), mt["expected_error_pct"] <= month_limit],
+        [mt["no_data"] + mt["filled"] == 0,
+         (mt["no_data"] == 0) & (mt["expected_error_pct"] <= month_limit),
+         mt["expected_error_pct"] <= month_limit],
         ["complete", "filled", "estimated"], "no data")
 
     # before / after: zone-days in fire zones without the record's own satellite, and left empty
@@ -515,7 +547,11 @@ def run_nodata(settings: Settings) -> dict:
                          "target": str(target_of[(r.min() - start).days])})
     runs = pd.DataFrame(runs, columns=["start", "end", "days", "target"]).sort_values("days", ascending=False) if runs else pd.DataFrame(columns=["start", "end", "days", "target"])
 
-    reg_summary = flags.groupby("satellite").agg(zone_days=("day", "size"), days=("day", "nunique")) if len(flags) else pd.DataFrame()
+    loss_flags = flags[flags["kind"] == "data loss"] if len(flags) else flags
+    reg_summary = (flags.assign(loss=flags["kind"] == "data loss").groupby("satellite").agg(
+        candidates=("day", "size"), data_loss_zone_days=("loss", "sum"),
+        data_loss_days=("day", lambda d: loss_flags.loc[loss_flags.index.intersection(d.index), "day"].nunique()))
+        if len(flags) else pd.DataFrame())
     if len(flags):
         flags = flags.assign(date=days[flags["day"].to_numpy()].date, zone=znames[flags["zone"].to_numpy()]).drop(columns="day")
 
@@ -535,7 +571,9 @@ def run_nodata(settings: Settings) -> dict:
     report = {"stage": "nodata", "dataset": settings.dataset, "date_range": [str(start.date()), str(end.date())],
               "tiles_tested": int(tested.sum()), "fire_zones": int(fire_z.sum()),
               "links": results, "chosen": chosen,
-              "regional_gaps": {s: {"zone_days": int(r["zone_days"]), "days": int(r["days"])} for s, r in reg_summary.iterrows()},
+              "regional_gaps": {s: {"candidates": int(r["candidates"]), "data_loss_zone_days": int(r["data_loss_zone_days"]),
+                                    "data_loss_days": int(r["data_loss_days"])} for s, r in reg_summary.iterrows()},
+              "last_days_dropped": n_drop,
               "zone_days_without_own_satellite": gaps_before, "zone_days_left_empty": gaps_after,
               "whole_world_empty_days": int(len(empty_days)),
               "status_by_target": {t: {k: int(v) for k, v in r.items()} for t, r in summ.iterrows()},
@@ -543,7 +581,7 @@ def run_nodata(settings: Settings) -> dict:
               "cloud": "not visible in FIRMS fire detections; needs a cloud product (fix 7b)"}
     with pd.option_context("display.width", 220, "display.max_columns", 20, "display.max_rows", 80):
         print(f"[nodata] {int(tested.sum())} tested tiles, {int(fire_z.sum())} zones with fire", flush=True)
-        print("[nodata] regional gaps found (zone-days when a satellite saw far less than its partner):\n"
+        print("[nodata] regional shortfalls (candidates) and those judged data loss (D25):\n"
               + (reg_summary.to_string() if len(reg_summary) else "none"), flush=True)
         if len(scores):
             print("[nodata] simulated outages, month total error by method (fire-weighted, %):\n"
