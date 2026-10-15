@@ -433,7 +433,14 @@ def event_check(settings, cfg) -> dict:
             row[f"{s} {var} hit"] = bool((v >= 1).any())
         rows.append(row)
     t = pd.DataFrame(rows)
-    other = ~pd.Series([(r, y, m) in ev_months for r, y, m in zip(mr["region"], mr["year"], mr["month"])], index=mr.index)
+    # base rate: every box once (two events may share a box), without any event month of that box
+    box = {f"event:{n}": tuple(e["bbox"]) for n, e in events.items()}
+    first = {}
+    for reg, b in box.items():
+        first.setdefault(b, reg)
+    ev_box = {(box[r], y, m) for r, y, m in ev_months}
+    other = pd.Series([first.get(box.get(r)) == r and (box.get(r), y, m) not in ev_box
+                       for r, y, m in zip(mr["region"], mr["year"], mr["month"])], index=mr.index)
     summary = {}
     for s in series:
         for var in ("frp", "cells"):
