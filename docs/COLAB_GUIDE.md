@@ -131,3 +131,27 @@ never to Drive.
 | `download failed after 3 attempts` | Network hiccup or FIRMS busy | Rerun the same command; finished years are skipped |
 | `already comes from the yearly world files` | A form download overlaps a fetched year | Use form downloads only for dates after 2025 |
 | Session crashes or "out of memory" | A large file read at once | Lower `processing.chunk_rows` in `config/settings.yaml` (e.g. `250000`) |
+
+## Outside data for the Phase 2 checks (Earthdata, once per account)
+
+The `external` stage downloads GFED4 burned area (ORNL DAAC) and MERRA-2 cloud (GES DISC) with the
+team's Earthdata account. The password never goes into a cell, a file or a chat:
+
+1. Colab, key icon on the left (Secrets): add `EARTHDATA_USERNAME` and `EARTHDATA_PASSWORD`, switch
+   "Notebook access" on for both.
+2. Once: sign in at urs.earthdata.nasa.gov, Applications > Authorized Apps > Approve More
+   Applications, find "NASA GESDISC DATA ARCHIVE", Approve.
+3. In the notebook:
+
+```python
+!pip install -q earthaccess pyhdf
+import os
+from google.colab import userdata
+os.environ["EARTHDATA_USERNAME"] = userdata.get("EARTHDATA_USERNAME")
+os.environ["EARTHDATA_PASSWORD"] = userdata.get("EARTHDATA_PASSWORD")
+print("Earthdata secrets loaded:", bool(os.environ["EARTHDATA_USERNAME"]) and bool(os.environ["EARTHDATA_PASSWORD"]))
+%cd /content/squadron-zero/pipeline
+!python -m shift.run --dataset global --stage external
+```
+
+The stage order for a full rebuild is in `docs/RUNBOOK.md`.
