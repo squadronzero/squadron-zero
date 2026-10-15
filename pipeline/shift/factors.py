@@ -33,6 +33,7 @@ from .counts import GROUPS, source_segments
 from .coverage import bad_days
 from .selection import baseline, drift, score, size_classes
 from .static_mask import masked_cells
+from .grid import cell_centre
 from .tiles import tile_name
 
 COLS = ["acq_date", "cell_id", "cell_lat", "cell_lon", "satellite", "frp_sum_mw"]
@@ -41,8 +42,62 @@ VARS = {"cells": "active_cells", "frp": "frp_mw"}
 
 # ---------------------------------------------------------------- one pass over the record
 
+def final_mask(settings: Settings, base: np.ndarray | None, tile_deg: float = 10.0) -> np.ndarray | None:
+    """D22 cells, plus (D26, fix 8) cells labelled non-fire in a single year inside the flare
+    tiles where stage places chose the stronger mask. Falls back to `base` when the places
+    output or the scan's per-year files are missing, or nonfire.flare_tiles_extra_mask is off."""
+    if not (settings.raw.get("nonfire") or {}).get("flare_tiles_extra_mask", False):
+        return base
+    pc = settings.processed_dir / "places" / "place_choices.csv"
+    if not pc.exists():
+        return base
+    t = pd.read_csv(pc)
+    tiles = set(t.loc[t["mask"].astype(str).str.contains("m1"), "tile"])
+    if not tiles:
+        return base
+    from .places import mask_tiers           # local import: places imports this module
+    tiers = mask_tiers(settings)
+    if tiers is None:
+        return base
+    m1 = tiers[tiers == "m1"].index.to_numpy("int64")
+    lat, lon = cell_centre(m1, settings.resolution)
+    names = np.array([tile_name(a, b, tile_deg) for a, b in zip(np.floor(lat / tile_deg) * tile_deg,
+                                                                 np.floor(lon / tile_deg) * tile_deg)])
+    extra = m1[np.isin(names, list(tiles))]
+    base = np.asarray(base if base is not None else [], dtype="int64")
+    return np.union1d(base, extra)
+
+
+def zone_key(lat, lon, zone_deg: float = 30.0) -> np.ndarray:
+    """Integer key of the 30-degree zone (same zones as stage nodata)."""
+    nlon = int(round(360 / zone_deg))
+    li = np.floor((np.asarray(lat, float) + 90) / zone_deg).astype("int64")
+    lo = np.floor((np.asarray(lon, float) + 180) / zone_deg).astype("int64")
+    return li * nlon + lo
+
+
+def data_loss_keys(settings: Settings, zone_deg: float = 30.0) -> np.ndarray | None:
+    """Zone-days stage nodata judged DATA LOSS (D25), as day * 100 + zone key. Any satellite's
+    loss removes that zone-day from every group, so a ratio never compares a full look with a
+    partial one."""
+    if not (settings.raw.get("factors") or {}).get("exclude_data_loss", False):
+        return None
+    p = settings.processed_dir / "nodata" / "regional_gaps.csv"
+    if not p.exists():
+        return None
+    r = pd.read_csv(p)
+    r = r[r.get("kind", pd.Series("data loss", index=r.index)) == "data loss"]
+    if r.empty:
+        return None
+    z = r["zone"].astype(str)
+    lat0 = z.str[1:3].astype(int) * np.where(z.str[0] == "N", 1, -1)
+    lon0 = z.str[4:7].astype(int) * np.where(z.str[3] == "E", 1, -1)
+    day = pd.to_datetime(r["date"]).to_numpy().astype("datetime64[D]").astype("int64")
+    return np.unique(day * 100 + zone_key(lat0 + 0.5, lon0 + 0.5, zone_deg))
+
+
 def monthly_world(settings: Settings, groups: dict, size_deg: float, exclude, labels: pd.Series | None,
-                  mask: np.ndarray | None, extra_root=None) -> pd.DataFrame:
+                  mask: np.ndarray | None, extra_root=None, drop_zone_days: np.ndarray | None = None) -> pd.DataFrame:
     """Burning cells and fire power per tile, fire-size class, in-mask flag, group, year, month.
 
     `extra_root`: a second cell-day folder with the same partition layout (the low-confidence
@@ -67,6 +122,10 @@ def monthly_world(settings: Settings, groups: dict, size_deg: float, exclude, la
         d["acq_date"] = pd.to_datetime(d["acq_date"]).dt.normalize()
         if ex is not None:
             d = d[~d["acq_date"].isin(ex)]
+        if drop_zone_days is not None and len(drop_zone_days):
+            key = (d["acq_date"].to_numpy().astype("datetime64[D]").astype("int64") * 100
+                   + zone_key(d["cell_lat"], d["cell_lon"]))
+            d = d[~np.isin(key, drop_zone_days)]
         for group, sats in groups.items():
             g = d[d["satellite"].isin(sats)]
             if g.empty:
@@ -291,8 +350,9 @@ def run_factors(settings: Settings) -> dict:
     bad = bad_days(settings, sats) if cfg.get("exclude_gap_days", True) else None
 
     labels, threshold = size_classes(settings, ref, years)
-    mask = masked_cells(settings)
-    m = monthly_world(settings, groups, tile_deg, bad, labels if len(labels) else None, mask)
+    mask = final_mask(settings, masked_cells(settings), tile_deg)
+    drop = data_loss_keys(settings)
+    m = monthly_world(settings, groups, tile_deg, bad, labels if len(labels) else None, mask, drop_zone_days=drop)
     if m.empty:
         return {"stage": "factors", "note": "no cell-days found"}
     out = settings.processed_dir / "counts"
@@ -376,7 +436,8 @@ def run_factors(settings: Settings) -> dict:
     # fire-weighted median: a factor counts in proportion to the fire it will scale
     fw = frp_tiles.assign(w=frp_tiles["tile"].map(weights).fillna(0)).dropna(subset=["range_pct"]).sort_values("range_pct")
     fw_median = float(fw["range_pct"][fw["w"].cumsum() >= fw["w"].sum() / 2].iloc[0]) if fw["w"].sum() else None
-    report = {"stage": "factors", "chosen": cur, "fire_size_threshold_mw": round(threshold, 2) if threshold == threshold else None,
+    report = {"stage": "factors", "chosen": cur,
+              "data_loss_zone_days_left_out": int(len(drop)) if drop is not None else 0, "fire_size_threshold_mw": round(threshold, 2) if threshold == threshold else None,
               "tiles_with_fire": int(fac["tile"].nunique()), "tiles_tested": int(len(tiles)),
               "masked_cells": int(len(mask)) if mask is not None else 0,
               "final_frp": {k: v for k, v in cur_res.items() if k != "per_tile"},

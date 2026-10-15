@@ -34,6 +34,7 @@ pipeline/
   shift/factors.py             D21 factors for every place on Earth, gap fixes and refinements
   shift/confidence.py          Fix 5: low-confidence cell-days (confscan) and the confidence asymmetry test
   shift/nodata.py              Fix 7: no-data mask: regional gaps, gap filling tested on simulated outages, availability per zone and day
+  shift/harmonise.py           Fix 9: the harmonised record L3 (0.25 deg, daily, S-NPP scale) with sources, uncertainty, 2012 gate and era-fair anomaly rule
   shift/places.py              Fix 8: per-place choices (flare-tile mask, MODIS source per tile, nested), borrowed factors tested, confidence drift, spotlight region
   shift/run.py                 one command runs every stage
   shift/quickstart.py          2-minute demo on samples/florida_sample.zip
