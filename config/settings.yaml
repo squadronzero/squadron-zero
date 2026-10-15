@@ -367,10 +367,10 @@ resolution:
   rule:
     gain_points: 1
     error_limit_pct: 10
-  # Must-fix 3 (16 Oct): MODIS processing changes in 2018 (version 6.2 -> 6.03; qc measured -4.2%
+  # Must-fix 3 (15 Oct): MODIS processing changes in 2018 (version 6.2 -> 6.03; qc measured -4.2%
   # MODIS per S-NPP detection). The MODIS piece is fitted on 2012-2019, so two of its eight fit
   # years are a different processing from the 2002-2011 years the factor is applied to.
-  # RULE FIXED 16 Oct 2026 BEFORE THE RUN: with the chosen variant, each same-version year is
+  # RULE FIXED 15 Oct 2026 BEFORE THE RUN: with the chosen variant, each same-version year is
   # predicted leave-one-year-out from (a) the other same-version years and (b) the other years of
   # the whole piece. (a) becomes the production fit only if its score (mean fire-weighted category
   # agreement, burning cells and fire power) is higher by more than gain_points, OR if for both
@@ -380,8 +380,8 @@ resolution:
     segment: MODIS
     same_version_years: [2012, 2017]
     rule: {gain_points: 1, error_gain_points: 0.5, max_score_drop_points: 1}
-  # Option E (16 Oct): test regions whose 2012 step gap (harmonised vs MODIS alone, burning cells,
-  # production fit years) stays outside +-step_limit_pct. RULE FIXED 16 Oct 2026 BEFORE THE RUN:
+  # Option E (15 Oct): test regions whose 2012 step gap (harmonised vs MODIS alone, burning cells,
+  # production fit years) stays outside +-step_limit_pct. RULE FIXED 15 Oct 2026 BEFORE THE RUN:
   # another variant replaces the chosen one INSIDE THAT REGION only if it brings the gap inside the
   # limit AND its backward error (2012-2015 from 2016-2019, both variables) is no larger in size
   # AND its leave-one-year-out month error (both variables) is no larger; otherwise the region is
@@ -398,7 +398,7 @@ daily:
   # Nominal local solar overpass hours [day, night]. Terra drifts earlier and Aqua later after
   # 2020, which moves the date boundary by about 15 degrees of longitude per hour of drift.
   overpass_hours: {Terra: [10.5, 22.5], Aqua: [13.5, 1.5], S-NPP: [13.5, 1.5], NOAA-20: [13.5, 1.5]}
-  # RULES FIXED 16 Oct 2026 BEFORE THE RUN. LABELS: a time scale (day, week, month) counts as
+  # RULES FIXED 15 Oct 2026 BEFORE THE RUN. LABELS: a time scale (day, week, month) counts as
   # TESTED for the MODIS years if the fire-weighted median error of MODIS x k against S-NPP over the
   # tested 2.5-degree cells is at most error_limit_pct for both variables; finer scales are shown
   # as "indicative" before 20 Jan 2012. DAY BASIS: the local solar day replaces the UTC day only if
@@ -424,7 +424,7 @@ external:
     years: [2003, 2026]
 
 phase2_checks:
-  # Stage `checks` (after harmonise). ALL RULES AND THE EVENT LIST FIXED 16 Oct 2026 BEFORE THE
+  # Stage `checks` (after harmonise). ALL RULES AND THE EVENT LIST FIXED 15 Oct 2026 BEFORE THE
   # FIRST RUN and committed to git; see pipeline/shift/checks.py for what each part does.
   baseline_years: [2003, 2025]          # the comparable record (D20), full years
   final_test:

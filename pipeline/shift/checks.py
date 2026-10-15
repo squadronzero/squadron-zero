@@ -1,6 +1,6 @@
 """Phase 2 checks on the final record (stage `checks`, after harmonise).
 
-Every rule below was fixed in settings `phase2_checks` on 16 Oct 2026, before the first run, and
+Every rule below was fixed in settings `phase2_checks` on 15 Oct 2026, before the first run, and
 committed to git (the commit time is the evidence; nothing was registered with a third party).
 
   1  ANOMALY RULE again, on the final 2.5-degree factors (must-fix 1). Same rule as fix 9

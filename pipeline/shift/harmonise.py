@@ -19,7 +19,7 @@ and day with fire:
   plus l3_uncertainty.parquet (95% range per tile, month, piece and variable) and the zone-day
   availability already written by stage nodata.
 
-Phase 2 package (16 Oct):
+Phase 2 package (15 Oct):
   * fills follow the method stage nodata chose for each link (D25): "substitute" fills every
     gap; "hybrid" fills only where the 10-degree tile has its own monthly fill factor (both
     variables) and leaves the rest to SCALING, recorded per tile and month in

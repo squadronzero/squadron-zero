@@ -1,4 +1,4 @@
-"""Phase 2 package (16 Oct): version test, region test, daily skill and day basis, hybrid fills,
+"""Phase 2 package (15 Oct): version test, region test, daily skill and day basis, hybrid fills,
 the checks stage, outside-data reducers and provenance, on synthetic worlds with known answers."""
 import json
 
