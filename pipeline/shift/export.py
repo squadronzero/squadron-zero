@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
+from .provenance import stamp
 from .config import Settings
 from .factors import final_mask
 from .harmonise import SOURCES
@@ -192,7 +193,9 @@ def run_export(settings: Settings) -> dict:
                       f"The newest day ({end.date()}) is cut off at download time and shown as no data.",
                       "The last year is partial.",
                       "Values before 20 Jan 2012 are MODIS put on the S-NPP scale; ranges in uncertainty.json."],
-            "tiles": tiles_meta, "validation_files": copied}
+            "tiles": tiles_meta, "validation_files": copied, "provenance": stamp(settings),
+            "record_info": (json.loads((settings.processed_dir / "l3" / "record_info.json").read_text())
+                            if (settings.processed_dir / "l3" / "record_info.json").exists() else None)}
     (out / "meta.json").write_text(json.dumps(meta, indent=1))
 
     size = sum(f.stat().st_size for f in out.rglob("*") if f.is_file())

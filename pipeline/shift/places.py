@@ -417,7 +417,7 @@ def run_places(settings: Settings) -> dict:
     with pd.option_context("display.width", 220, "display.max_columns", 20, "display.max_rows", 80):
         print(f"[places] {len(tiles)} tested tiles; {len(flare_tiles)} flare tiles "
               f"(D22 cells hold >= {100 * float(cfg.get('flare_share', 0.2)):.0f}% of MODIS burning cells): {sorted(flare_tiles)}", flush=True)
-        print("[places] B. mask strength in flare tiles (pre-registered rule, fire power):\n"
+        print("[places] B. mask strength in flare tiles (rule fixed before the run, fire power):\n"
               + steps.drop(columns=["per_tile"], errors="ignore").to_string(index=False), flush=True)
         print(f"[places] B. CHOSEN mask: {cur_name}", flush=True)
         if len(watch_tbl):

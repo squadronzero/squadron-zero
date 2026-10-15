@@ -22,7 +22,7 @@ quiet fire day. This stage finds every hole and fills or flags it, in four steps
                     fallback chain tile month -> tile all year -> 30-degree zone -> world)
         hybrid      substitute where the tile has its own monthly factor, scale elsewhere
      Every gap length is tested equally often (1-3, 4-7, 8-14 and 15-27 days). A
-     PRE-REGISTERED RULE (settings `nodata.rule`) decides per link.
+     The rule fixed before the run (settings `nodata.rule`) decides per link.
   4. The record's availability, per zone and day: the record's own satellite ("primary"),
      filled from a substitute in the order of `nodata.record`, or "no data". Per zone and
      month: how many days are primary, filled and missing, and the expected error of the
@@ -332,7 +332,7 @@ def score_methods(t: pd.DataFrame, buckets, limit_tile: float) -> tuple[pd.DataF
 
 
 def decide(sc: pd.DataFrame, rule: dict) -> tuple[str, str]:
-    """PRE-REGISTERED RULE (settings nodata.rule, fixed 15 Oct 2026 before the first run).
+    """RULE FIXED BEFORE THE RUN (settings nodata.rule, 15 Oct 2026, committed to git).
     Default for a gap is `scale`. A fill method (substitute or hybrid) is adopted for a link
     only if, on the simulated outages, its fire-weighted absolute error of month totals is
     lower than scale's by more than gain_points for fire power, AND not higher for burning
@@ -565,6 +565,8 @@ def run_nodata(settings: Settings) -> dict:
         scores.to_csv(out / "fill_test_scores.csv", index=False)
         bys.to_csv(out / "fill_test_by_gap_length.csv", index=False)
     flags.to_csv(out / "regional_gaps.csv", index=False)
+    import json
+    (out / "fill_choice.json").write_text(json.dumps({"chosen": chosen, "why": {k: v["why"] for k, v in results.items()}}, indent=2))
     runs.to_csv(out / "remaining_empty_days.csv", index=False)
 
     ms = mt[mt["year"] >= int(str((settings.raw.get("record") or {}).get("comparable_start", "2003"))[:4])]

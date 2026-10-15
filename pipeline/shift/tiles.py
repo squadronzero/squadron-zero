@@ -15,7 +15,7 @@ calibration for every place on Earth (fix 8). Results are summarised three ways:
 tiles where each option is best, fire-weighted average (big fire tiles count more) and
 plain median, plus the worst tiles by name of their centre.
 
-A pre-registered rule (settings `worldwide.rule`) says when a decision counts as confirmed.
+A rule fixed before the run (settings `worldwide.rule`) says when a decision counts as confirmed.
 
     python -m shift.run --dataset global --stage worldwide     (after `counts`)
 """

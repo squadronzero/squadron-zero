@@ -235,7 +235,7 @@ def run_confidence(settings: Settings) -> dict:
     fw_gap_trend = float(np.average(tile_tbl["gap_trend_pct_points_per_year"][ok].abs(), weights=w[ok])) if ok.any() else None
     fw_gap = float(np.average(tile_tbl["mean_gap_pct_points"][ok], weights=w[ok])) if ok.any() else None
 
-    # -------- 3. the variants, scored like stage factors (pre-registered rule)
+    # -------- 3. the variants, scored like stage factors (rule fixed before the run)
     variants = ccfg.get("variants") or {"current": ["main", "main"], "all": ["all", "all"],
                                          "modis_all": ["all", "main"], "viirs_all": ["main", "all"]}
     src_groups = sorted({g for g, *_ in segments})
@@ -304,6 +304,6 @@ def run_confidence(settings: Settings) -> dict:
             print(f"[confidence] asymmetry over {len(tiles)} tested tiles: S-NPP drops {fw_gap:+.2f} points more than "
                   f"MODIS (fire-weighted); that gap changes by {fw_gap_trend:.3f} points a year on average", flush=True)
         print("[confidence] tiles where the gap changes most:\n" + tile_tbl.head(10).to_string(), flush=True)
-        print("[confidence] variants (pre-registered rule):\n" + tbl.to_string(index=False), flush=True)
+        print("[confidence] variants (rule fixed before the run):\n" + tbl.to_string(index=False), flush=True)
         print(f"[confidence] RESULT: {win['variant']} | {why}", flush=True)
     return report

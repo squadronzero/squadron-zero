@@ -35,9 +35,14 @@ pipeline/
   shift/confidence.py          Fix 5: low-confidence cell-days (confscan) and the confidence asymmetry test
   shift/nodata.py              Fix 7: no-data mask: regional gaps, gap filling tested on simulated outages, availability per zone and day
   shift/harmonise.py           Fix 9: the harmonised record L3 (0.25 deg, daily, S-NPP scale) with sources, uncertainty, 2012 gate and era-fair anomaly rule
-  shift/resolution.py          Fix 9b: 10-degree vs 2.5-degree factors judged at fine scale, regional 2012 steps, pre-registered rule
+  shift/resolution.py          Fix 9b: 10-degree vs 2.5-degree factors judged at fine scale, regional 2012 steps, rule fixed before the run
   shift/export.py              Phase 3: static website files (daily per 1-degree cell, monthly 0.25-degree map, availability, uncertainty, Not-a-fire layer, validation) + site_data.zip
   shift/places.py              Fix 8: per-place choices (flare-tile mask, MODIS source per tile, nested), borrowed factors tested, confidence drift, spotlight region
+  shift/daily.py               Phase 2 package: skill of the MODIS years by day, week and month; UTC day vs local solar day
+  shift/external.py            Phase 2 package: GFED4 burned area and MERRA-2 cloud, downloaded and reduced (download stage)
+  shift/checks.py              Phase 2 package: anomaly rule on final factors, untouched 2026 test, range coverage, simple methods, known events, dated critical periods, burned area, cloud
+  shift/solar.py               local solar day of a satellite pass
+  shift/provenance.py          git commit, settings hash and software versions stamped into every report
   shift/run.py                 one command runs every stage
   shift/quickstart.py          2-minute demo on samples/florida_sample.zip
   tests/                       automated checks
@@ -87,16 +92,19 @@ On Colab, follow `docs/COLAB_GUIDE.md`.
 | counts | L2 global | detection-count harmonisation: active cell-days, MODIS scaled to VIIRS per region and month, 2012 jump measured | Phase 2, fix 1 |
 | continuity | counts daily series | NOAA-20 tied to S-NPP per region and month (cells and fire power), tested on 2024-2025, S-NPP outage days filled | Phase 2, fix 2 |
 | sources | counts daily series | fix 1 fitted from MODIS merged, Aqua alone and Terra alone; holdout error, 2012 step and orbital drift compared | Phase 2, fix 3 |
-| selection | counts daily series + L2 | six fair tests (backward, category agreement, leave-one-year-out, MODIS-era stability, bootstrap, fire size) choose the MODIS calibration source by a pre-registered rule | Phase 2, fix 3b (D19) |
+| selection | counts daily series + L2 | six fair tests (backward, category agreement, leave-one-year-out, MODIS-era stability, bootstrap, fire size) choose the MODIS calibration source by a rule fixed before the run | Phase 2, fix 3b (D19) |
 | frp | counts daily series + L2 pairs | fire power harmonisation: v1 line, line with intercept, line through zero, paired ratio and ratio of totals compared with the same tests and rule | Phase 2, fix 4 (D21) |
-| worldwide | L2 global | D19 and D21 re-tested on a 10° grid of tiles over the whole Earth; pre-registered confirm rule; first factors for every place | Phase 2 (fix 8 start) |
-| factors | L2 global + static mask | D21 production factors for every 10° tile (burning cells and fire power, each D19 piece on all its years, bootstrap range); non-fire mask in every year, fire-size split, zone borrowing and seasonal smoothing tested by pre-registered rules | Phase 2 (D21, D22, fixes 6 and 8) |
+| worldwide | L2 global | D19 and D21 re-tested on a 10° grid of tiles over the whole Earth; confirm rule fixed before the run; first factors for every place | Phase 2 (fix 8 start) |
+| factors | L2 global + static mask | D21 production factors for every 10° tile (burning cells and fire power, each D19 piece on all its years, bootstrap range); non-fire mask in every year, fire-size split, zone borrowing and seasonal smoothing tested by rule fixed before the runs | Phase 2 (D21, D22, fixes 6 and 8) |
 | confscan | FIRMS yearly world files | Low-confidence vegetation-fire detections only, as cell-days in their own folder (`celldays_low`); main record untouched | Phase 2 (fix 5) |
-| confidence | L2 global + `celldays_low` | Low-confidence share per satellite, year and tile; keeping low for MODIS, VIIRS or both scored against the current filter by a pre-registered rule | Phase 2 (fix 5) |
-| nodata | L2 global + qc coverage table | Regional gaps (a satellite far below its partner in one 30-degree zone); fill links (S-NPP <- NOAA-20, S-NPP <- D19 MODIS, MODIS <- Aqua or Terra) tested on simulated outages under a pre-registered rule; status per zone and day (primary, filled, no data) and per zone and month with an expected error | Phase 2 (fix 7) |
-| places | L2 global + static sources + counts + confidence outputs | Stronger non-fire mask in flare tiles; MODIS source per tile chosen on 2016-2025 and judged on 2012-2015; borrowed factors rebuilt without each tile and tested; confidence drift per tile; Bangladesh spotlight with a first harmonised calendar. Every choice under a pre-registered rule | Phase 2 (fix 8) |
-| harmonise | L2 + model | L3 harmonised record | Phase 2 |
-| validate | L3 + holdout years | metrics per region | Phase 2 |
+| confidence | L2 global + `celldays_low` | Low-confidence share per satellite, year and tile; keeping low for MODIS, VIIRS or both scored against the current filter by a rule fixed before the run | Phase 2 (fix 5) |
+| nodata | L2 global + qc coverage table | Regional gaps (a satellite far below its partner in one 30-degree zone); fill links (S-NPP <- NOAA-20, S-NPP <- D19 MODIS, MODIS <- Aqua or Terra) tested on simulated outages under a rule fixed before the run; status per zone and day (primary, filled, no data) and per zone and month with an expected error | Phase 2 (fix 7) |
+| places | L2 global + static sources + counts + confidence outputs | Stronger non-fire mask in flare tiles; MODIS source per tile chosen on 2016-2025 and judged on 2012-2015; borrowed factors rebuilt without each tile and tested; confidence drift per tile; Bangladesh spotlight with a first harmonised calendar. Every choice under a rule fixed before the run | Phase 2 (fix 8) |
+| resolution | L2 global + factors | 2.5-degree factors (D28), the 2018 MODIS version test, the regional 2012-step test (option E); writes `counts/fine_monthly.parquet` for later stages | Phase 2 |
+| daily | L2 + resolution | skill of MODIS x k by day, week and month (out of sample); labels for pre-2012 time scales; UTC vs local solar day | Phase 2 |
+| external | NASA Earthdata (GFED4, MERRA-2) | burned area and cloud per month, reduced to small tables | Phase 2 |
+| harmonise | L2 + all choices above | L3 harmonised record, hybrid fills with scaling, region tables, provenance | Phase 2 |
+| checks | L3 + fine monthly + outside data | final checks of Phase 2 (see `docs/RUNBOOK.md`) | Phase 2 |
 | calendar | L3 | climatology, anomalies, critical periods | Phase 3 |
 
 Each stage writes `data/processed/<dataset>/report_<stage>.json` with row counts and rejection reasons, so every number in the app can be traced back.
@@ -118,6 +126,11 @@ Dataset citations (as requested by NASA FIRMS):
 
 We acknowledge the use of data from NASA's Fire Information for Resource Management System
 (FIRMS, https://www.earthdata.nasa.gov/firms), part of NASA's Earth Science Data and Information System (ESDIS).
+
+Outside data used only for checks (Phase 2 options B and C):
+
+- GFED4 monthly burned area without small fires (Giglio, Randerson and van der Werf 2013), ORNL DAAC. https://doi.org/10.3334/ORNLDAAC/1293
+- MERRA-2 monthly radiation diagnostics M2TMNXRAD v5.12.4, total cloud area fraction CLDTOT (Global Modeling and Assimilation Office), NASA GES DISC.
 
 Other data: Florida state outline (`config/regions/florida.geojson`), a public-domain US state boundary.
 

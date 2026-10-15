@@ -5,7 +5,7 @@
 2. confidence: a synthetic world where S-NPP starts labelling far more fires "low" from 2015
    (MODIS never does). Dropping low then makes S-NPP look smaller after 2015, so factors fitted
    on 2015-2017 predict 2012-2014 badly. Adding the low detections back removes the problem,
-   and the pre-registered rule must pick a variant that keeps low-confidence S-NPP.
+   and the rule fixed before the run must pick a variant that keeps low-confidence S-NPP.
 """
 import zipfile
 from pathlib import Path

@@ -2,7 +2,7 @@
 
 Fires vary from month to month (so some months are unusual). Aqua sees a steady 50% of
 fires; Terra sees 50% until 2014 and then fewer every year (orbital drift). Half the
-places have small fires, half large. The pre-registered rule must not pick Terra, every
+places have small fires, half large. The rule fixed before the run must not pick Terra, every
 test must produce output, and the backward test must show Terra's drift as an error.
 """
 import numpy as np

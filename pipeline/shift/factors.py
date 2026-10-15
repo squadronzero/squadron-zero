@@ -16,7 +16,7 @@ calendar month, k = S-NPP total / MODIS total, on the D19 source pieces (merged 
   Plus: the Aqua piece is fitted on all its years (2020-2025), not 2020-2021 only.
 
 Every option is tested on the same 10-degree tiles with leave-one-year-out and backward tests,
-and kept or dropped by the pre-registered rules in settings `factors.rule`, in this order:
+and kept or dropped by the rules fixed before the run in settings `factors.rule`, in this order:
 mask, size split, borrowing, smoothing. The chosen variant is then fitted on all overlap years
 and written as a factor table for every tile with fire, for burning cells AND fire power (so
 counts and fire power stay consistent), with a bootstrap range from resampling whole years.
@@ -277,14 +277,17 @@ def evaluate(cube: Cube, segments, ref, years, bw_fit, bw_test, smooth, borrow, 
             "global_backward_error_pct": glob, "tiles": int(ok.sum()), "per_tile": t}
 
 
-def bootstrap(cube: Cube, segments, ref, years, smooth, borrow, prior, min_v, n: int, seed: int) -> dict:
-    """Final factors fitted on all overlap years, plus a 95% range from resampling whole years."""
+def bootstrap(cube: Cube, segments, ref, years, smooth, borrow, prior, min_v, n: int, seed: int,
+              fit_years: dict | None = None) -> dict:
+    """Final factors fitted on all overlap years (or, for a piece listed in `fit_years`, only on
+    those years: the version test of stage resolution), plus a 95% range from resampling whole years."""
     rng = np.random.default_rng(seed)
     res = {}
     for g, y0, y1 in segments:
         if g not in cube.A:
             continue
-        span = [y for y in years if int(y0) <= y <= int(y1) and y in cube.years]
+        allowed = (fit_years or {}).get(g)
+        span = [y for y in years if int(y0) <= y <= int(y1) and y in cube.years and (allowed is None or y in allowed)]
         if not span:
             continue
         idx = [cube.years.index(y) for y in span]
@@ -379,7 +382,7 @@ def run_factors(settings: Settings) -> dict:
         return evaluate(cube(var, v["mask"], v["size"]), segments, ref, years, bw_fit, bw_test, v["smooth"], v["borrow"],
                         prior[var], min_v[var], tiles, weights, limit)
 
-    # The pre-registered sequence, judged on fire power (D21)
+    # The sequence fixed before the run, judged on fire power (D21)
     steps = []
     cur = {"mask": False, "size": False, "borrow": False, "smooth": False}
     cur_res = ev(cur)
@@ -450,7 +453,7 @@ def run_factors(settings: Settings) -> dict:
               "fire_weighted_median_range_pct_frp": fw_median}
     with pd.option_context("display.width", 220, "display.max_columns", 20, "display.max_rows", 60):
         print(f"[factors] {report['tiles_with_fire']} tiles with fire, {len(tiles)} tested; {report['masked_cells']} non-fire cells in the mask", flush=True)
-        print("[factors] pre-registered sequence on fire power (each step kept only if the rule allows):\n"
+        print("[factors] sequence fixed before the run, on fire power (each step kept only if the rule allows):\n"
               + steps.to_string(index=False), flush=True)
         print(f"[factors] CHOSEN: {cur}", flush=True)
         print(f"[factors] burning cells with the same choice: fire-weighted score {cells_res['fire_weighted_score']}, "

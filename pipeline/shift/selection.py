@@ -1,4 +1,4 @@
-"""Phase 2, fix 3b: choose the MODIS calibration source with fair, pre-registered tests (D19).
+"""Phase 2, fix 3b: choose the MODIS calibration source with fair tests under rules fixed before the run (D19).
 
 SHIFT's job is a fire calendar: is this month normal, unusual or critical for this place?
 So the source that calibrates the MODIS years must (1) add no false jumps or trends,
@@ -230,7 +230,7 @@ def size_classes(settings: Settings, ref: str, years: list[int]) -> tuple[pd.Ser
 
 
 def pick_winner(summary: pd.DataFrame, rule: dict) -> tuple[str | None, str]:
-    """Apply the pre-registered rule (settings `selection.rule`)."""
+    """Apply the rule fixed before the run (settings `selection.rule`)."""
     s = summary.copy()
     limit = float(rule.get("max_global_backward_error_pct", 10))
     s["eligible"] = s["global_backward_error_pct"].abs() <= limit
@@ -288,7 +288,7 @@ def run_selection(settings: Settings) -> dict:
     scores = pd.concat([x for x in scores if len(x) and not x.isna().all().all()] or scores, ignore_index=True)
     drifts = pd.concat(drifts, ignore_index=True) if drifts else pd.DataFrame(columns=["region", "candidate", "drift_pct_per_year"])
 
-    # Summary per candidate and the pre-registered choice
+    # Summary per candidate and the choice by the rule fixed before the run
     summ = []
     for name in cands:
         s = scores[scores["candidate"] == name]
@@ -406,7 +406,7 @@ def run_selection(settings: Settings) -> dict:
             print("[selection] test 6: mean absolute total error % over regions\n" + er[[c for c in names if c in er]].to_string(), flush=True)
         print("[selection] best candidate per region (leave-one-year-out agreement; information for fix 8)\n"
               + per_region.to_string(index=False), flush=True)
-        print(f"[selection] WINNER by the pre-registered rule: {winner} ({why})", flush=True)
+        print(f"[selection] WINNER by the rule fixed before the run: {winner} ({why})", flush=True)
     return report
 
 

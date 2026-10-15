@@ -22,6 +22,9 @@
     python -m shift.run --dataset global --stage export      # Phase 3: static files for the website (D5) + site_data.zip
     python -m shift.run --dataset global --stage harmonise   # Phase 2 fix 9: the harmonised record L3, 2012 gate, era-fair anomaly rule
     python -m shift.run --dataset global --stage places      # Phase 2 fix 8: per-place choices, borrowed factors tested, spotlight
+    python -m shift.run --dataset global --stage daily       # Phase 2 must-fix 6 and F: skill by day/week/month, UTC vs local day
+    python -m shift.run --dataset global --stage external    # Phase 2 B and C: GFED4 burned area, MERRA-2 cloud (download)
+    python -m shift.run --dataset global --stage checks      # Phase 2 checks on the final record (after harmonise)
     python -m shift.run --settings path/to/other_settings.yaml
 
 Run from the `pipeline/` folder (or add it to PYTHONPATH).
@@ -51,6 +54,10 @@ from .places import run_places
 from .harmonise import run_harmonise
 from .resolution import run_resolution
 from .export import run_export
+from .daily import run_daily
+from .external import run_external
+from .checks import run_checks
+from .provenance import stamp
 
 STAGES = {
     "ingest": run_ingest,
@@ -66,7 +73,8 @@ EXTRA_STAGES = {"fetch": run_fetch, "scan": run_scan, "qc": run_qc, "crosscheck"
                 "worldwide": run_worldwide, "factors": run_factors,
                 "confscan": run_confscan, "confidence": run_confidence,
                 "nodata": run_nodata, "places": run_places,
-                "harmonise": run_harmonise, "resolution": run_resolution, "export": run_export}
+                "harmonise": run_harmonise, "resolution": run_resolution, "export": run_export,
+                "daily": run_daily, "external": run_external, "checks": run_checks}
 # What to print at the end of each stage (the full report is always saved as JSON).
 SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
            "qc": ["date_range", "days_by_status", "step_checks", "real_fires_in_mask_pct"],
@@ -83,9 +91,13 @@ SUMMARY = {"scan": ["version_summary", "static_mask", "missing"],
                           "fire_weighted_abs_gap_trend_pct_points_per_year"],
            "nodata": ["chosen", "links", "regional_gaps", "zone_days_without_own_satellite",
                       "zone_days_left_empty", "whole_world_empty_days", "months_by_status"],
-           "resolution": ["chosen", "adopted", "why", "region_step_gap_pct"],
+           "resolution": ["chosen", "adopted", "why", "region_step_gap_final_pct", "version_test", "region_test"],
+           "daily": ["labels_before_2012", "finest_tested_scale", "day_basis", "date_shift_share"],
+           "external": ["gfed", "merra2"],
+           "checks": ["summary"],
            "export": ["files", "size_mb", "zip_mb", "largest_file", "fits_github_pages", "notfire_cells", "zip_path"],
-           "harmonise": ["factor_resolution_deg", "rows", "rows_by_source", "gate_2012_step", "uncertainty_median_range_pct", "anomaly_rule"],
+           "harmonise": ["factor_resolution_deg", "rows", "rows_by_source", "day_basis", "fill_methods",
+                         "tile_days_scaled_hybrid", "gate_2012_step", "uncertainty_median_range_pct"],
            "places": ["mask_chosen", "source_choice", "source_why", "source_picks_tested_tiles",
                       "borrowed_factor_test", "confidence_drift_tiles_over_5pct"]}
 
@@ -96,21 +108,23 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--dataset", help="dataset folder to use: global or florida (default: from settings)")
     ap.add_argument("--stage", choices=list(STAGES) + list(EXTRA_STAGES), help="run only this stage")
     ap.add_argument("--years", type=int, nargs="+", help="fetch/scan/confscan only: years to download")
-    ap.add_argument("--family", nargs="+", help="fetch/scan/confscan only: products from fetch.products (MODIS, VIIRS, VIIRS_NOAA20)")
-    ap.add_argument("--force", action="store_true", help="fetch/scan/confscan only: redo years already done")
+    ap.add_argument("--family", nargs="+", help="fetch/scan/confscan: products from fetch.products (MODIS, VIIRS, VIIRS_NOAA20); "
+                                               "external: gfed and/or merra2")
+    ap.add_argument("--force", action="store_true", help="fetch/scan/confscan/external only: redo what is already done")
     args = ap.parse_args(argv)
 
     settings = load_settings(args.settings, dataset=args.dataset)
     print(f"dataset: {settings.dataset}  raw: {settings.raw_dir}  processed: {settings.processed_dir}")
     for name in ([args.stage] if args.stage else list(STAGES)):
         t0 = time.time()
-        if name in ("fetch", "scan", "confscan"):
+        if name in ("fetch", "scan", "confscan", "external"):
             report = EXTRA_STAGES[name](settings, years=args.years, families=args.family, force=args.force)
         elif name in EXTRA_STAGES:
             report = EXTRA_STAGES[name](settings)
         else:
             report = STAGES[name](settings)
         report["seconds"] = round(time.time() - t0, 1)
+        report["provenance"] = stamp(settings)
         path = write_report(report, settings, name)
         print(f"[{name}] done in {report['seconds']} s -> {path}")
         shown = ({k: report.get(k) for k in SUMMARY[name]} if name in SUMMARY

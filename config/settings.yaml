@@ -113,7 +113,7 @@ counts:
   # (0.05 deg cell with >= 1 detection) replace raw detections, then the MODIS record is
   # scaled to VIIRS with a factor per test region and calendar month, fitted on the
   # calibration years and tested on the holdout years.
-  # D19 (decided 14 Oct, by the pre-registered selection rule): Terra + Aqua merged per
+  # D19 (decided 14 Oct, by the selection rule fixed before the run): Terra + Aqua merged per
   # cell-day until 2019, Aqua alone from 2020 (Terra's orbit drifts from 2020). Each piece
   # gets its own factor.
   source_segments: [[MODIS, 2000, 2019], [Aqua, 2020, 2100]]
@@ -151,7 +151,7 @@ selection:
   fire_size_split: true                # test 6: small-fire vs large-fire cells (about 5 extra minutes)
   min_cells_per_month: 30
   exclude_gap_days: true
-  # PRE-REGISTERED RULE, fixed on 14 Oct 2026 before the first run (do not change after seeing results):
+  # RULE FIXED BEFORE THE RUN (committed to git) on 14 Oct 2026 before the first run (do not change after seeing results):
   # score = mean category agreement % over the test regions (not global), averaged over the
   # leave-one-year-out and backward tests. A candidate is out if its global backward error
   # is beyond +-max_global_backward_error_pct. If several are within tie_margin_points of the
@@ -174,7 +174,7 @@ frp:
   forward_test_years: [2022, 2025]
   min_frp_mw_per_month: 300            # thinner months use the region's all-year ratio
   exclude_gap_days: true
-  # PRE-REGISTERED RULE (D21), fixed on 14 Oct 2026 before the first run, same as D19:
+  # RULE FIXED BEFORE THE RUN (D21, committed to git) on 14 Oct 2026 before the first run, same as D19:
   # score = mean category agreement % over the test regions, leave-one-year-out and backward
   # averaged; out if global backward error beyond +-10%; within 2 points -> smallest global
   # false trend wins.
@@ -193,7 +193,7 @@ worldwide:
   backward_fit_years: [2016, 2025]
   backward_test_years: [2012, 2015]
   exclude_gap_days: true
-  # PRE-REGISTERED RULE, fixed on 14 Oct 2026 before the first run: a decision is CONFIRMED
+  # RULE FIXED BEFORE THE RUN (committed to git) on 14 Oct 2026 before the first run: a decision is CONFIRMED
   # worldwide if the chosen option has the highest fire-weighted score over all tested tiles
   # (score = mean of leave-one-year-out and backward category agreement), or is within
   # confirm_margin_points of the best. Otherwise CHECK: the decision goes back to Squadron Zero.
@@ -202,11 +202,11 @@ worldwide:
     error_limit_pct: 10
 
 nonfire:
-  # D22 (decided 14 Oct by its pre-registered rule in the factors run): remove the static
+  # D22 (decided 14 Oct by its rule fixed before the run in the factors run): remove the static
   # non-fire cells (static_mask) in EVERY year, not only from unlabelled data, so gas flares
   # and industry are treated the same before and after NASA's 2018 labelling change.
   mask_all_years: true
-  # D26 (fix 8, decided 15 Oct by its pre-registered rule): in the 50 flare tiles chosen by stage
+  # D26 (fix 8, decided 15 Oct by its rule fixed before the run): in the 50 flare tiles chosen by stage
   # places, also remove cells NASA labelled non-fire in a single year. Read from
   # processed/global/places/place_choices.csv by stages factors and harmonise.
   flare_tiles_extra_mask: true
@@ -231,7 +231,7 @@ factors:
   exclude_gap_days: true
   exclude_data_loss: true            # D25: zone-days stage nodata judged data loss are left out of every fit
   watch_tiles: [N20E000, N20E010, N20E050, N60E050, N60E060, N60E070, N30W110, N20E030, N40E090]
-  # PRE-REGISTERED RULES, fixed on 14 Oct 2026 before the first run. Judged on fire power,
+  # RULES FIXED BEFORE THE RUN (committed to git) on 14 Oct 2026 before the first run. Judged on fire power,
   # fire-weighted score over the tested tiles (mean of leave-one-year-out and backward
   # category agreement), in this order:
   #   1. non-fire mask in every year: kept if the score drops by no more than
@@ -260,7 +260,7 @@ confidence:
     all: [all, all]
     modis_all: [all, main]
     viirs_all: [main, all]
-  # PRE-REGISTERED RULE, fixed on 14 Oct 2026 before the run. Same tiles, tests, D19 pieces
+  # RULE FIXED BEFORE THE RUN (committed to git) on 14 Oct 2026 before the run. Same tiles, tests, D19 pieces
   # and D22 mask as stage factors. Score = mean of the fire-weighted fire power score and the
   # fire-weighted burning-cell score. A variant is eligible only if its global backward error
   # is within +-error_limit_pct for both. The current filter stays unless an eligible variant
@@ -308,7 +308,7 @@ nodata:
   gap_buckets: [[1, 3], [4, 7], [8, 14], [15, 27]]   # every gap length tested equally often
   replicates: 3
   seed: 7
-  # PRE-REGISTERED RULE, fixed on 15 Oct 2026 before the first run. Simulated outages on days
+  # RULE FIXED BEFORE THE RUN (committed to git) on 15 Oct 2026 before the first run. Simulated outages on days
   # when target and substitute both worked, in the tested tiles of stage factors. Default for
   # a gap is `scale` (month total x days in month / days with data). A fill method
   # (substitute, or hybrid = substitute only where the tile has its own monthly factor) is
@@ -359,7 +359,7 @@ resolution:
   # with at least min_ref_cells_per_month S-NPP burning cells a month, same tests as factors.
   fine_deg: 2.5
   min_ref_cells_per_month: 10
-  # PRE-REGISTERED RULE, fixed 15 Oct 2026 before the first run: the best fine variant
+  # RULE FIXED BEFORE THE RUN (committed to git), 15 Oct 2026 before the first run: the best fine variant
   # replaces the 10-degree factor only if (1) its score (mean of fire-weighted burning-cell and
   # fire-power scores at fine scale) is higher by more than gain_points, (2) its mean absolute
   # 2012-step gap over the D18 regions is lower, (3) its global backward error is within
@@ -367,6 +367,104 @@ resolution:
   rule:
     gain_points: 1
     error_limit_pct: 10
+  # Must-fix 3 (16 Oct): MODIS processing changes in 2018 (version 6.2 -> 6.03; qc measured -4.2%
+  # MODIS per S-NPP detection). The MODIS piece is fitted on 2012-2019, so two of its eight fit
+  # years are a different processing from the 2002-2011 years the factor is applied to.
+  # RULE FIXED 16 Oct 2026 BEFORE THE RUN: with the chosen variant, each same-version year is
+  # predicted leave-one-year-out from (a) the other same-version years and (b) the other years of
+  # the whole piece. (a) becomes the production fit only if its score (mean fire-weighted category
+  # agreement, burning cells and fire power) is higher by more than gain_points, OR if for both
+  # variables its pooled error on those years is closer to zero by more than error_gain_points
+  # while its score is at most max_score_drop_points lower.
+  version_test:
+    segment: MODIS
+    same_version_years: [2012, 2017]
+    rule: {gain_points: 1, error_gain_points: 0.5, max_score_drop_points: 1}
+  # Option E (16 Oct): test regions whose 2012 step gap (harmonised vs MODIS alone, burning cells,
+  # production fit years) stays outside +-step_limit_pct. RULE FIXED 16 Oct 2026 BEFORE THE RUN:
+  # another variant replaces the chosen one INSIDE THAT REGION only if it brings the gap inside the
+  # limit AND its backward error (2012-2015 from 2016-2019, both variables) is no larger in size
+  # AND its leave-one-year-out month error (both variables) is no larger; otherwise the region is
+  # flagged and its measured gap is added to the uncertainty of every factor inside it.
+  region_test:
+    step_limit_pct: 10
+    variants: [coarse, fine, fine_shrunk, fine_seasonal, fine_shrunk_seasonal, all_year]
+
+daily:
+  # Must-fix 6 and option F (stage `daily`, after resolution, before harmonise). Backward test day
+  # by day: final model fitted on fit_years of the MODIS piece, predicting test_years.
+  test_years: [2012, 2015]
+  fit_years: [2016, 2019]
+  # Nominal local solar overpass hours [day, night]. Terra drifts earlier and Aqua later after
+  # 2020, which moves the date boundary by about 15 degrees of longitude per hour of drift.
+  overpass_hours: {Terra: [10.5, 22.5], Aqua: [13.5, 1.5], S-NPP: [13.5, 1.5], NOAA-20: [13.5, 1.5]}
+  # RULES FIXED 16 Oct 2026 BEFORE THE RUN. LABELS: a time scale (day, week, month) counts as
+  # TESTED for the MODIS years if the fire-weighted median error of MODIS x k against S-NPP over the
+  # tested 2.5-degree cells is at most error_limit_pct for both variables; finer scales are shown
+  # as "indicative" before 20 Jan 2012. DAY BASIS: the local solar day replaces the UTC day only if
+  # the daily error falls by more than gain_points for both variables and the daily correlation
+  # falls for neither.
+  rule: {error_limit_pct: 25, gain_points: 1}
+
+external:
+  # Stage `external` (download): outside data for options B and C, reduced at once to small tables
+  # in processed/global/external/, downloaded files deleted. Earthdata Login comes from Colab
+  # Secrets EARTHDATA_USERNAME / EARTHDATA_PASSWORD (never typed anywhere).
+  cell_deg: 2.5
+  gfed:
+    # GFED4.0 monthly burned area WITHOUT small fires (MCD64A1-based), 0.25 deg, hectares,
+    # ORNL DAAC doi:10.3334/ORNLDAAC/1293 (files GFED4.0_MQ_YYYYMM_BA.hdf, 1995-2016)
+    short_name: fire_emissions_v4_R1_1293
+    years: [2003, 2016]
+  merra2:
+    # MERRA-2 monthly radiation diagnostics, total cloud area fraction (GES DISC)
+    short_name: M2TMNXRAD
+    version: "5.12.4"
+    variable: CLDTOT
+    years: [2003, 2026]
+
+phase2_checks:
+  # Stage `checks` (after harmonise). ALL RULES AND THE EVENT LIST FIXED 16 Oct 2026 BEFORE THE
+  # FIRST RUN and committed to git; see pipeline/shift/checks.py for what each part does.
+  baseline_years: [2003, 2025]          # the comparable record (D20), full years
+  final_test:
+    # untouched: no factor was fitted on 2026. Complete months only (the newest download ends 12 Oct).
+    months: ["2026-01", "2026-09"]
+    error_limit_pct: 10                 # PASS if the global error is within +-10% for both variables
+    allow_rerun: false                  # the test is opened once; later runs show the stored result
+  coverage:
+    calibrate_years: [2016, 2019]       # month bands set on these years (leave-one-year-out) ...
+    verify_years: [2012, 2015]          # ... and verified here (backward)
+    fire_bins_cells: [30, 300]          # predicted S-NPP-scale burning cells a month: thin / medium / busy
+    accept: [90, 99]                    # verified coverage of a 95% band must land here
+  events:
+    # Known fire events: box [west, south, east, north] and the months they burned.
+    russia_2010:       {bbox: [35.0, 50.0, 55.0, 58.0],     months: ["2010-07", "2010-08"]}
+    greece_2007:       {bbox: [20.5, 36.3, 26.0, 41.0],     months: ["2007-08"]}
+    indonesia_2006:    {bbox: [95.0, -6.0, 119.0, 6.0],     months: ["2006-09", "2006-10"]}
+    indonesia_2015:    {bbox: [95.0, -6.0, 119.0, 6.0],     months: ["2015-09", "2015-10"]}
+    amazon_2019:       {bbox: [-74.0, -18.0, -44.0, 5.0],   months: ["2019-08"]}
+    australia_2019_20: {bbox: [140.0, -39.0, 154.0, -28.0], months: ["2019-12", "2020-01"]}
+    pantanal_2020:     {bbox: [-59.0, -22.0, -54.0, -15.0], months: ["2020-08", "2020-09", "2020-10"]}
+    canada_2023:       {bbox: [-141.0, 42.0, -52.0, 70.0],  months: ["2023-06"]}
+  critical:
+    # a day is critical when its 7-day fire power is at least z standard deviations (log scale)
+    # above the same days of year (+-doy_halfwidth) in the other baseline years; critical days at
+    # most max_gap_days apart form one run; a run needs min_days critical days. Days with more than
+    # half the area's zones without data are left out.
+    window_days: 7
+    z: 2
+    doy_halfwidth: 15
+    min_days: 3
+    max_gap_days: 2
+  gfed:
+    # the record / burned-area ratio may step at 2012 (after / before) by no more than MODIS
+    # alone's ratio steps at any other year (same 3-year windows), for both variables.
+    before_years: [2009, 2011]
+    after_years: [2013, 2015]
+  cloud:
+    percentile: 90     # a cell-month is cloudy when its cloud fraction reaches its own 90th percentile
+    min_ratio: 1.5     # the flag is shown if low months are cloudy at least 1.5 x as often as all months
 
 export:
   # Phase 3 (stage `export`, after harmonise): static files for the website (D5).
@@ -380,6 +478,8 @@ harmonise:
   resolution_deg: 0.25
   out_subdir: l3
   use_fine_factors: auto     # auto = use stage resolution's fine table when its rule adopted it
+  fill_method: auto          # auto = each link's method from stage nodata (D25): substitute, or hybrid
+  day_basis: auto            # auto = stage daily's rule (UTC unless the local solar day wins); utc; local
   # GATE, fixed 15 Oct 2026 before the first run: the global 2012 step (mean 2013-2015 / mean
   # 2009-2011) of the harmonised record is within +-step_tolerance_pct of the step MODIS alone
   # shows, for burning cells and fire power.

@@ -19,6 +19,17 @@ and day with fire:
   plus l3_uncertainty.parquet (95% range per tile, month, piece and variable) and the zone-day
   availability already written by stage nodata.
 
+Phase 2 package (16 Oct):
+  * fills follow the method stage nodata chose for each link (D25): "substitute" fills every
+    gap; "hybrid" fills only where the 10-degree tile has its own monthly fill factor (both
+    variables) and leaves the rest to SCALING, recorded per tile and month in
+    scale_tile_months.parquet (days seen, days scaled, multiplier). Daily rows stay observations;
+    the *_est columns of the region tables apply the multipliers (the month as if fully seen);
+  * dates are UTC, or the local solar day when stage daily's rule adopted it (option F);
+  * monthly_regions.csv and daily_regions.csv: harmonised and raw sums per test region, known-
+    event box and the world, for stage checks;
+  * the anomaly rule is no longer run here: stage checks runs it on the final factors.
+
 Checks written before the run (settings harmonise.gate and harmonise.anomaly_rule):
   GATE  the harmonised world shows no instrument jump at the 2012 switch: the step
         (mean 2013-2015 / mean 2009-2011) is within +-step_tolerance_pct of the step MODIS alone
@@ -39,17 +50,16 @@ import pandas as pd
 
 from .config import Settings
 from .counts import GROUPS, source_segments
-from .coverage import bad_days
-from .factors import Cube, data_loss_keys, final_mask, monthly_world, zone_key
+from .factors import final_mask, zone_key
+from .provenance import stamp
 from .region import in_bbox, test_regions
-from .selection import baseline, classify
+from .solar import local_day_shift
 from .static_mask import masked_cells
 from .tiles import tile_name
 
-COLS = ["acq_date", "cell_id", "cell_lat", "cell_lon", "satellite", "frp_sum_mw"]
+COLS = ["acq_date", "cell_id", "cell_lat", "cell_lon", "satellite", "frp_sum_mw", "n_day", "n_night"]
 SOURCES = {0: "S-NPP", 1: "NOAA-20 fill", 2: "D19 MODIS fill", 3: "MODIS x k",
            4: "Aqua fill x k", 5: "Terra fill x k", 6: "Terra only x k (not comparable)"}
-HIGH = {"unusual", "critical"}
 
 
 def tile_key(lat, lon, deg: float) -> np.ndarray:
@@ -86,7 +96,7 @@ class Table:
 
 def factor_source(settings: Settings) -> tuple:
     """Which MODIS -> S-NPP factor table the record uses: the fine table from stage resolution
-    when its pre-registered rule adopted it (fix 9b), else the 10-degree table from stage factors.
+    when its rule (fixed before the run) adopted it (fix 9b), else the 10-degree table from stage factors.
     Returns (path, degrees, measured half-widths for borrowed levels or None)."""
     import json
     fcfg = settings.raw.get("factors") or {}
@@ -118,7 +128,42 @@ def load_tables(settings: Settings, fill_deg: float, factor_path=None, factor_de
         f = pd.read_parquet(ff)
         for (link, seg, var), g in f.groupby(["link", "segment", "variable"]):
             out[("fill", link, seg, var)] = Table(g, fill_deg)
+            out[("own", link, seg, var)] = own_table(g, fill_deg)
     return out
+
+
+def own_table(df: pd.DataFrame, deg: float) -> np.ndarray:
+    """True per (tile, month) where the fill factor is the tile's own monthly factor (hybrid)."""
+    nt = int(round(180 / deg)) * int(round(360 / deg))
+    a = np.zeros((nt, 12), bool)
+    if len(df) and "source" in df:
+        d = df[df["source"].astype(str) == "own month"]
+        if len(d):
+            keys = np.array([key_of_name(t, deg) for t in d["tile"]])
+            a[keys, d["month"].to_numpy(int) - 1] = True
+    return a
+
+
+def fill_methods(settings: Settings) -> dict:
+    """The method stage nodata chose per link (D25): nodata/fill_choice.json, else the saved
+    nodata report. Setting harmonise.fill_method = substitute forces substitution everywhere."""
+    import json
+    forced = (settings.raw.get("harmonise") or {}).get("fill_method", "auto")
+    for p in (settings.processed_dir / "nodata" / "fill_choice.json", settings.processed_dir / "report_nodata.json"):
+        if p.exists():
+            chosen = json.loads(p.read_text()).get("chosen") or {}
+            return {k: ("substitute" if forced == "substitute" and v != "scale" else v) for k, v in chosen.items()}
+    return {}
+
+
+def day_basis(settings: Settings) -> str:
+    """utc or local: harmonise.day_basis, where auto = stage daily's decision."""
+    import json
+    b = str((settings.raw.get("harmonise") or {}).get("day_basis", "auto"))
+    if b in ("utc", "local"):
+        return b
+    p = settings.processed_dir / "daily" / "day_basis.json"
+    return json.loads(p.read_text()).get("basis", "utc") if p.exists() else "utc"
 
 
 def status_arrays(settings: Settings, start: pd.Timestamp, nd: int, zone_deg: float):
@@ -157,26 +202,45 @@ def group_frame(d: pd.DataFrame, name: str) -> pd.DataFrame:
 
 
 def harmonise_month(d: pd.DataFrame, status, target, tables: dict, segments, tile_deg: float, zone_deg: float,
-                    res25: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+                    res25: float, methods: dict | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """L3 rows for one month of cell-days, and the raw comparators (merged MODIS and S-NPP
-    burning cells and fire power per cell-day, for the 2012 step check)."""
+    burning cells and fire power per cell-day, for the 2012 step check).
+
+    `d["uday"]` (UTC day) decides the zone-day status; `d["day"]` (UTC or local solar day) is the
+    day the value is written to. A link whose method is "hybrid" keeps a filled cell-day only where
+    its 10-degree tile has its own monthly fill factor for both variables; the rest is scaled."""
+    methods = methods or {}
+    uday = d["uday"].to_numpy() if "uday" in d else d["day"].to_numpy()
     d = d.assign(zk=zone_key(d["cell_lat"], d["cell_lon"], zone_deg))
-    st = status[d["day"].to_numpy(), d["zk"].to_numpy()]
-    tg = target[d["day"].to_numpy()]
+    st = status[uday, d["zk"].to_numpy()]
+    tg = target[uday]
     d = d.assign(st=st, tg=tg)
     parts = []
 
-    def take(group, mask_fn, src, k_cells, k_frp):
+    year = int(d["year"].iloc[0])
+    month = int(d["month"].iloc[0])
+
+    def own_both(link, seg):
+        oc, of = tables.get(("own", link, seg, "cells")), tables.get(("own", link, seg, "frp"))
+        if oc is None or of is None:
+            return None
+        return lambda g: (oc & of)[tile_key(g["cell_lat"].to_numpy(), g["cell_lon"].to_numpy(), tile_deg), month - 1]
+
+    def take(group, mask_fn, src, k_cells, k_frp, link=None, seg=None):
         g = group_frame(d[mask_fn], group)
         if g.empty:
             return
+        if link is not None and methods.get(link) == "hybrid":
+            own = own_both(link, seg)
+            if own is not None:
+                g = g[own(g)]
+                if g.empty:
+                    return
         kc, kf = k_cells(g), k_frp(g)
         parts.append(pd.DataFrame({"day": g["day"].to_numpy(), "cell_lat": g["cell_lat"].to_numpy(),
                                    "cell_lon": g["cell_lon"].to_numpy(), "cells_h": kc,
                                    "frp_h": g["frp_sum_mw"].to_numpy(float) * kf, "src": src}))
 
-    year = int(d["year"].iloc[0])
-    month = int(d["month"].iloc[0])
     mvec = lambda g: np.full(len(g), month)  # noqa: E731
     one = lambda g: np.ones(len(g))  # noqa: E731
 
@@ -198,15 +262,18 @@ def harmonise_month(d: pd.DataFrame, status, target, tables: dict, segments, til
     # S-NPP era
     take("S-NPP", sel("S-NPP", "primary"), 0, one, one)
     take("NOAA-20", sel("S-NPP", "filled: NOAA-20"), 1,
-         fill("S-NPP <- NOAA-20", "NOAA-20", "cells"), fill("S-NPP <- NOAA-20", "NOAA-20", "frp"))
+         fill("S-NPP <- NOAA-20", "NOAA-20", "cells"), fill("S-NPP <- NOAA-20", "NOAA-20", "frp"),
+         "S-NPP <- NOAA-20", "NOAA-20")
     take(dg, sel("S-NPP", "filled: D19"), 2,
-         fill("S-NPP <- D19", dseg, "cells"), fill("S-NPP <- D19", dseg, "frp"))
+         fill("S-NPP <- D19", dseg, "cells"), fill("S-NPP <- D19", dseg, "frp"), "S-NPP <- D19", dseg)
     # MODIS era
     take("MODIS", sel("MODIS", "primary"), 3, fac(mseg, "cells"), fac(mseg, "frp"))
     take("Aqua", sel("MODIS", "filled: Aqua"), 4,
-         fill("MODIS <- Aqua", "Aqua", "cells", fac(mseg, "cells")), fill("MODIS <- Aqua", "Aqua", "frp", fac(mseg, "frp")))
+         fill("MODIS <- Aqua", "Aqua", "cells", fac(mseg, "cells")), fill("MODIS <- Aqua", "Aqua", "frp", fac(mseg, "frp")),
+         "MODIS <- Aqua", "Aqua")
     take("Terra", sel("MODIS", "filled: Terra"), 5,
-         fill("MODIS <- Terra", "Terra", "cells", fac(mseg, "cells")), fill("MODIS <- Terra", "Terra", "frp", fac(mseg, "frp")))
+         fill("MODIS <- Terra", "Terra", "cells", fac(mseg, "cells")), fill("MODIS <- Terra", "Terra", "frp", fac(mseg, "frp")),
+         "MODIS <- Terra", "Terra")
     # Terra only (Jan-Jun 2002)
     take("Terra", sel("Terra", "primary"), 6, fac(mseg, "cells"), fac(mseg, "frp"))
 
@@ -217,8 +284,7 @@ def harmonise_month(d: pd.DataFrame, status, target, tables: dict, segments, til
         c = np.floor((x["cell_lon"].to_numpy() + 180) / res25).astype("int64")
         x["cell25"] = r * n25 + c
         out = x.groupby(["day", "cell25", "src"], as_index=False).agg(
-            cells_h=("cells_h", "sum"), frp_h=("frp_h", "sum"), n_raw=("cells_h", "size"),
-            lat=("cell_lat", "mean"), lon=("cell_lon", "mean"))
+            cells_h=("cells_h", "sum"), frp_h=("frp_h", "sum"), n_raw=("cells_h", "size"))
         out["lat"] = (-90 + (out["cell25"] // n25 + 0.5) * res25).astype("float32")
         out["lon"] = (-180 + (out["cell25"] % n25 + 0.5) * res25).astype("float32")
     else:
@@ -227,9 +293,47 @@ def harmonise_month(d: pd.DataFrame, status, target, tables: dict, segments, til
     for name in ("MODIS", "S-NPP"):
         g = group_frame(d, name)
         if len(g):
-            raw.append(pd.DataFrame({"group": name, "cell_lat": g["cell_lat"].to_numpy(),
+            raw.append(pd.DataFrame({"group": name, "day": g["day"].to_numpy(), "cell_lat": g["cell_lat"].to_numpy(),
                                      "cell_lon": g["cell_lon"].to_numpy(), "frp": g["frp_sum_mw"].to_numpy(float)}))
     return out, (pd.concat(raw, ignore_index=True) if raw else pd.DataFrame())
+
+
+def scale_month(status, target, tables: dict, methods: dict, day0: int, day1: int, month: int,
+                tile_deg: float, zone_deg: float) -> pd.DataFrame:
+    """Per 10-degree tile for one month: days in the record, days left to scaling (hybrid fills
+    where the tile has no own factor, plus "no data" days of its zone) and the multiplier that
+    turns the month's observed total into a full-month estimate."""
+    nlat, nlon = int(round(180 / tile_deg)), int(round(360 / tile_deg))
+    tk = np.arange(nlat * nlon)
+    tlat = -90 + (tk // nlon + 0.5) * tile_deg
+    tlon = -180 + (tk % nlon + 0.5) * tile_deg
+    zk = zone_key(tlat, tlon, zone_deg)
+    st = status[day0:day1]
+    rec = (target[day0:day1] != "").sum()
+    if rec == 0:
+        return pd.DataFrame()
+    scaled = np.zeros(len(tk))
+    for link, meth in methods.items():
+        if meth != "hybrid":
+            continue
+        tgt, sub = [x.strip() for x in link.split("<-")]
+        on = target[day0:day1] == tgt
+        filled = (st[on] == f"filled: {sub}").sum(0)                   # per zone
+        seg = sub if sub != "D19" else None
+        own = None
+        for key, t in tables.items():
+            if len(key) == 4 and key[0] == "own" and key[1] == link and (seg is None or key[2] == seg):
+                own = t[:, month - 1] if own is None else own & t[:, month - 1]
+        if own is None:
+            own = np.zeros(len(tk), bool)
+        scaled += np.where(own, 0, filled[zk])
+    nodata = (st == "no data").sum(0)[zk]
+    seen = rec - scaled - nodata
+    mult = np.where(seen > 0, rec / np.maximum(seen, 1), 1.0)
+    keep = (scaled + nodata) > 0
+    return pd.DataFrame({"tile": [tile_name(a - tile_deg / 2, b - tile_deg / 2, tile_deg) for a, b in zip(tlat[keep], tlon[keep])],
+                         "tile_key": tk[keep], "month": month, "days": int(rec), "days_scaled_hybrid": scaled[keep].astype(int),
+                         "days_no_data": nodata[keep].astype(int), "multiplier": mult[keep]})
 
 
 def region_sums(lat, lon, values: dict, regions: dict) -> dict:
@@ -266,6 +370,12 @@ def uncertainty_table(settings: Settings, factor_path=None, measured: dict | Non
             if v is not None and np.isfinite(v):
                 m = f["source"] == src
                 f.loc[m, "hw95_log"] = np.fmax(f.loc[m, "hw95_log"], v)
+    import json
+    rp = settings.processed_dir / "counts" / "resolution_choice.json"
+    if measured and rp.exists():                # option E: regions still jumping at 2012 carry that gap
+        for fl in json.loads(rp.read_text()).get("region_flags") or []:
+            m = in_bbox(fl["bbox"], f["lon"], f["lat"])
+            f.loc[m, "hw95_log"] = np.sqrt(f.loc[m, "hw95_log"] ** 2 + float(fl["extra_hw95_log"]) ** 2)
     pc = settings.processed_dir / "places" / "place_choices.csv"
     if pc.exists():
         p = pd.read_csv(pc)
@@ -274,68 +384,32 @@ def uncertainty_table(settings: Settings, factor_path=None, measured: dict | Non
             modis = f["segment"].astype(str).str.startswith("MODIS")
             f.loc[modis, "hw95_log"] = np.sqrt(f.loc[modis, "hw95_log"] ** 2 + drift[modis] ** 2)
     f["range_pct"] = (100 * (np.exp(f["hw95_log"]) - 1)).round(1)
-    return f[["segment", "tile", "month", "variable", "k", "source", "hw95_log", "range_pct"]]
+    return f[["segment", "tile", "lat", "lon", "month", "variable", "k", "source", "hw95_log", "range_pct"]]
 
 
-def anomaly_test(settings: Settings, tile_deg: float, zone_deg: float, rule: dict) -> dict:
-    """Plain vs era-fair classification of out-of-sample MODIS x k months (see module doc)."""
-    fcfg = settings.raw.get("factors") or {}
-    ref = fcfg.get("reference", "S-NPP")
-    segs = source_segments(settings.raw.get("counts") or {})
-    span = lambda key, dflt: list(range(int(fcfg.get(key, dflt)[0]), int(fcfg.get(key, dflt)[1]) + 1))  # noqa: E731
-    years = span("overlap_years", [2012, 2025])
-    g0, y0, y1 = segs[0]
-    test_years = [y for y in years if int(y0) <= y <= int(y1)]
-    groups = {g: GROUPS[g] for g in sorted({g for g, *_ in segs} | {ref})}
-    bad = bad_days(settings, sorted({s for g in groups for s in GROUPS[g]})) if fcfg.get("exclude_gap_days", True) else None
-    mask = final_mask(settings, masked_cells(settings), tile_deg)
-    m = monthly_world(settings, groups, tile_deg, bad, None, mask, drop_zone_days=data_loss_keys(settings))
-    if m.empty or len(test_years) < 3:
-        return {"note": "not enough data"}
-    m["tile"] = [tile_name(a, b, tile_deg) for a, b in zip(m["lat0"], m["lon0"])]
-    r = m[(m["group"] == ref) & m["year"].isin(years) & ~m["in_mask"]]
-    per_tile = r.groupby("tile")["active_cells"].sum() / (12 * len(years))
-    tiles = per_tile[per_tile >= float(fcfg.get("min_ref_cells_per_month", 50))].index
-    weights = r.groupby("tile")["active_cells"].sum()
-    all_years = list(range(int(m["year"].min()), int(m["year"].max()) + 1))
-    cube = Cube(m, "frp", True, False, zone_deg, all_years, tile_deg)
-    prior, min_v = float(fcfg.get("prior_frp_mw", 300)), float(fcfg.get("min_frp_mw_per_month", 300))
-    p = pd.concat([cube.predict(segs, ref, [x for x in years if x != y], [y], False, False, prior, min_v)
-                   for y in test_years], ignore_index=True)
-    p = p[p["region"].isin(tiles)]
-    truth = cube.predict(segs, ref, years, years, False, False, prior, min_v)
-    base = baseline(truth[["region", "year", "month", "real"]].rename(columns={"real": ref}), ref, years, [])
-    p = p.merge(base, on=["region", "month"], how="left")
-    sigma = None
-    bt = settings.processed_dir / "places" / "borrowed_factor_test.csv"
-    if bt.exists():
-        b = pd.read_csv(bt).set_index("level")
-        if "own month" in b.index:
-            sigma = float(np.log1p(b.loc["own month", "median_month_abs_error_pct"] / 100) / 0.6745)
-    if sigma is None:
-        sigma = float(rule.get("sigma_fallback_log", 0.18))
-    w = p["region"].map(weights).fillna(0).to_numpy()
-    real_hi = classify(p["real"], p["mu"], p["sd"]).isin(HIGH).to_numpy()
+def check_regions(settings: Settings) -> dict:
+    """Areas summed for stage checks: the world, the D18 test regions and the known-event boxes
+    (settings phase2_checks.events), each {name: bbox}."""
+    out = {"global": [-180.0, -90.0, 180.0, 90.0]}
+    out.update({k: v["bbox"] for k, v in test_regions(settings).items()})
+    for name, e in ((settings.raw.get("phase2_checks") or {}).get("events") or {}).items():
+        out[f"event:{name}"] = [float(x) for x in e["bbox"]]
+    return out
 
-    def rates(cls):
-        hi = cls.isin(HIGH).to_numpy()
-        fa = float(100 * w[hi & ~real_hi].sum() / w[hi].sum()) if w[hi].sum() else 0.0
-        ca = float(100 * w[hi & real_hi].sum() / w[real_hi].sum()) if w[real_hi].sum() else 0.0
-        return round(fa, 1), round(ca, 1), int(hi.sum())
-    plain = rates(classify(p["pred"], p["mu"], p["sd"]))
-    fair = rates(classify(p["pred"], p["mu"], np.sqrt(p["sd"] ** 2 + sigma ** 2)))
-    fa_drop, ca_max = float(rule.get("fa_drop_points", 5)), float(rule.get("caught_max_drop_points", 5))
-    adopt = (plain[0] - fair[0] >= fa_drop) and (plain[1] - fair[1] <= ca_max)
-    return {"years": [test_years[0], test_years[-1]], "tiles": int(len(tiles)), "sigma_log": round(sigma, 3),
-            "plain": {"false_alarm_pct": plain[0], "caught_pct": plain[1], "flagged_months": plain[2]},
-            "era_fair": {"false_alarm_pct": fair[0], "caught_pct": fair[1], "flagged_months": fair[2]},
-            "real_unusual_months": int(real_hi.sum()),
-            "adopted": "era-fair" if adopt else "plain",
-            "why": (f"false alarms {plain[0]}% -> {fair[0]}% (needed a drop of >= {fa_drop:g}), "
-                    f"caught {plain[1]}% -> {fair[1]}% (allowed drop <= {ca_max:g})")}
+
+def area_sums(day, lat, lon, values: dict, regions: dict) -> pd.DataFrame:
+    """Daily sums of `values` per bbox area."""
+    out = []
+    base = pd.DataFrame({"day": np.asarray(day), **{k: np.asarray(v, float) for k, v in values.items()}})
+    for name, bb in regions.items():
+        m = np.ones(len(base), bool) if name == "global" else in_bbox(bb, lon, lat)
+        if m.any():
+            out.append(base[m].groupby("day", as_index=False).sum().assign(region=name))
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 
 def run_harmonise(settings: Settings) -> dict:
+    import json
     cfg = settings.raw.get("harmonise") or {}
     fcfg = settings.raw.get("factors") or {}
     tile_deg = float(fcfg.get("tile_deg", 10))
@@ -355,20 +429,29 @@ def run_harmonise(settings: Settings) -> dict:
     status, target = status_arrays(settings, start, nd, zone_deg)
     fpath, fdeg, measured = factor_source(settings)
     tables = load_tables(settings, tile_deg, fpath, fdeg)
-    print(f"[harmonise] MODIS -> S-NPP factors: {fpath.name} ({fdeg:g}-degree cells)", flush=True)
+    methods = fill_methods(settings)
+    basis_name = day_basis(settings)
+    hours = (settings.raw.get("daily") or {}).get("overpass_hours")
+    print(f"[harmonise] MODIS -> S-NPP factors: {fpath.name} ({fdeg:g}-degree cells); fill methods {methods or 'not found'}; "
+          f"days: {basis_name}", flush=True)
+    if not methods:
+        return {"stage": "harmonise", "note": "fill methods of stage nodata not found (nodata/fill_choice.json or "
+                                              "report_nodata.json): rerun stage nodata"}
     _, mseg0 = segment_for(2011, segments)
     missing = [k for k in (("factor", mseg0, "cells"), ("factor", mseg0, "frp")) if k not in tables]
     if missing:
         return {"stage": "harmonise", "note": f"factor tables missing {missing}: rerun stage factors"}
     mask = final_mask(settings, masked_cells(settings), tile_deg)
     mask = np.asarray(mask if mask is not None else [], dtype="int64")
-    regions = {"global": {"bbox": [-180, -90, 180, 90]}, **test_regions(settings)}
+    regions = check_regions(settings)
 
     months = sorted({(int(p.parent.name.split("=")[1]), int(p.name.split("=")[1]))
                      for p in root.glob("sensor_family=*/year=*/month=*")}) if root.exists() else []
     print(f"[harmonise] building L3 at {res25} degrees for {len(months)} months "
           f"({start.date()} to {end.date()}); {len(mask):,} non-fire cells removed in every year", flush=True)
-    yearly, rows_written, src_counts = {}, 0, {}
+    rows_written, src_counts = 0, {}
+    daily_parts, scale_parts, spill = [], [], {}
+    write = lambda l3, od: l3[["date", "cell25", "lat", "lon", "cells_h", "frp_h", "n_raw", "src"]].to_parquet(od / "part.parquet", index=False)  # noqa: E731
     for i, (y, mo) in enumerate(months):
         parts = [root / f"sensor_family={f}" / f"year={y}" / f"month={mo}" for f in ("MODIS", "VIIRS")]
         parts = [p for p in parts if p.exists()]
@@ -377,39 +460,83 @@ def run_harmonise(settings: Settings) -> dict:
         d = d[d["satellite"].isin(["Terra", "Aqua", "S-NPP", "NOAA-20"])]
         if len(mask):
             d = d[~np.isin(d["cell_id"].to_numpy("int64"), mask)]
-        d["day"] = (pd.to_datetime(d["acq_date"]) - start).dt.days
-        d = d[(d["day"] >= 0) & (d["day"] < nd)]
+        d["uday"] = (pd.to_datetime(d["acq_date"]) - start).dt.days
+        d = d[(d["uday"] >= 0) & (d["uday"] < nd)]
         if d.empty:
             continue
+        d["day"] = d["uday"] + (local_day_shift(d["cell_lon"], d["satellite"], d["n_day"], d["n_night"], hours)
+                                if basis_name == "local" else 0)
+        d = d[(d["day"] >= 0) & (d["day"] < nd)]
         d["year"], d["month"] = y, mo
-        l3, raw = harmonise_month(d, status, target, tables, segments, tile_deg, zone_deg, res25)
+        l3, raw = harmonise_month(d, status, target, tables, segments, tile_deg, zone_deg, res25, methods)
+        m0 = (pd.Timestamp(y, mo, 1) - start).days
+        m1 = (pd.Timestamp(y, mo, 1) + pd.offsets.MonthBegin(1) - start).days
+        sc = scale_month(status, target, tables, methods, max(m0, 0), min(m1, nd), mo, tile_deg, zone_deg)
+        mult = np.ones(int(round(180 / tile_deg)) * int(round(360 / tile_deg)))
+        if len(sc):
+            scale_parts.append(sc.assign(year=y))
+            mult[sc["tile_key"].to_numpy()] = sc["multiplier"].to_numpy()
         if len(l3):
             l3["date"] = (start + pd.to_timedelta(l3["day"], unit="D")).dt.date.astype(str)
-            od = out_dir / f"year={y}" / f"month={mo}"
-            od.mkdir(parents=True, exist_ok=True)
             l3 = l3.astype({"cell25": "int32", "src": "int8", "cells_h": "float32", "frp_h": "float32", "n_raw": "int32"})
-            l3[["date", "cell25", "lat", "lon", "cells_h", "frp_h", "n_raw", "src"]].to_parquet(od / "part.parquet", index=False)
+            for s_, n in l3["src"].value_counts().items():
+                src_counts[SOURCES[int(s_)]] = src_counts.get(SOURCES[int(s_)], 0) + int(n)
             rows_written += len(l3)
-            for s, n in l3["src"].value_counts().items():
-                src_counts[SOURCES[int(s)]] = src_counts.get(SOURCES[int(s)], 0) + int(n)
-            hs = region_sums(l3["lat"], l3["lon"], {"cells_h": l3["cells_h"], "frp_h": l3["frp_h"]}, regions)
-            for reg, v in hs.items():
-                a = yearly.setdefault((reg, y), {})
-                for k, val in v.items():
-                    a[k] = a.get(k, 0.0) + val
-        for name in ("MODIS", "S-NPP"):
-            g = raw[raw["group"] == name] if len(raw) else raw
-            if len(g):
-                rs = region_sums(g["cell_lat"], g["cell_lon"], {f"{name}_cells": np.ones(len(g)), f"{name}_frp": g["frp"]}, regions)
-                for reg, v in rs.items():
-                    a = yearly.setdefault((reg, y), {})
-                    for k, val in v.items():
-                        a[k] = a.get(k, 0.0) + val
+            mul = mult[tile_key(l3["lat"], l3["lon"], tile_deg)]
+            daily_parts.append(area_sums(l3["day"], l3["lat"], l3["lon"],
+                                         {"cells_h": l3["cells_h"], "frp_h": l3["frp_h"],
+                                          "cells_h_est": l3["cells_h"] * mul, "frp_h_est": l3["frp_h"] * mul},
+                                         regions))
+            own = l3["date"].str[:7] == f"{y:04d}-{mo:02d}"
+            for (yy, mm), g in l3[~own].groupby([l3["date"].str[:4].astype(int), l3["date"].str[5:7].astype(int)]):
+                spill.setdefault((int(yy), int(mm)), []).append(g)
+            if own.any():
+                od = out_dir / f"year={y}" / f"month={mo}"
+                od.mkdir(parents=True, exist_ok=True)
+                write(l3[own], od)
+        if len(raw):
+            daily_parts.append(area_sums(raw["day"], raw["cell_lat"], raw["cell_lon"],
+                                         {"MODIS_cells": (raw["group"] == "MODIS").astype(float),
+                                          "MODIS_frp": raw["frp"].where(raw["group"] == "MODIS", 0.0),
+                                          "S-NPP_cells": (raw["group"] == "S-NPP").astype(float),
+                                          "S-NPP_frp": raw["frp"].where(raw["group"] == "S-NPP", 0.0)}, regions))
         if (i + 1) % 24 == 0:
             print(f"[harmonise] {i + 1}/{len(months)} months done ({y}-{mo:02d})", flush=True)
+    for (yy, mm), gs in spill.items():                 # local solar days that fall in the next/previous month
+        od = out_dir / f"year={yy}" / f"month={mm}"
+        od.mkdir(parents=True, exist_ok=True)
+        old = [pd.read_parquet(od / "part.parquet")] if (od / "part.parquet").exists() else []
+        x = pd.concat(old + gs, ignore_index=True).groupby(["date", "cell25", "src"], as_index=False).agg(
+            lat=("lat", "first"), lon=("lon", "first"), cells_h=("cells_h", "sum"), frp_h=("frp_h", "sum"), n_raw=("n_raw", "sum"))
+        write(x.astype({"cell25": "int32", "src": "int8", "cells_h": "float32", "frp_h": "float32", "n_raw": "int32"}), od)
 
-    yt = pd.DataFrame([{"region": r, "year": y, **v} for (r, y), v in yearly.items()]).sort_values(["region", "year"])
     out_dir.mkdir(parents=True, exist_ok=True)
+    cols = ["cells_h", "frp_h", "cells_h_est", "frp_h_est", "MODIS_cells", "MODIS_frp", "S-NPP_cells", "S-NPP_frp"]
+    dl = pd.concat([x for x in daily_parts if len(x)], ignore_index=True)
+    dl = dl.groupby(["region", "day"], as_index=False)[[c for c in cols if c in dl]].sum()
+    dl = dl.reindex(columns=["region", "day", *cols]).fillna(0.0)
+    dl["date"] = (start + pd.to_timedelta(dl["day"], unit="D")).dt.date.astype(str)
+    dl["year"], dl["month"] = dl["date"].str[:4].astype(int), dl["date"].str[5:7].astype(int)
+    # share of each bbox area's 30-degree zones with no data that day (for the dated runs of stage checks)
+    nd_share = []
+    for name, bb in regions.items():
+        zl = [z for la in np.arange(-90, 90, zone_deg) for lo in np.arange(-180, 180, zone_deg)
+              if la < bb[3] and la + zone_deg > bb[1] and lo < bb[2] and lo + zone_deg > bb[0]
+              for z in [int(zone_key(la + 0.5 * zone_deg, lo + 0.5 * zone_deg, zone_deg))]]
+        share = (status[:, zl] == "no data").mean(1) if zl else np.zeros(nd)
+        nd_share.append(pd.DataFrame({"region": name, "day": np.arange(nd), "no_data_share": share}))
+    full = pd.concat(nd_share, ignore_index=True)
+    full["date"] = (start + pd.to_timedelta(full["day"], unit="D")).dt.date.astype(str)
+    daily = full.merge(dl.drop(columns=["date", "year", "month"]), on=["region", "day"], how="left").fillna(0.0)
+    daily = daily[["region", "date", "cells_h", "frp_h", "MODIS_cells", "MODIS_frp", "S-NPP_cells", "S-NPP_frp", "no_data_share"]]
+    daily.to_parquet(out_dir / "daily_regions.parquet", index=False)
+    monthly = dl.groupby(["region", "year", "month"], as_index=False)[cols].sum()
+    monthly.to_csv(out_dir / "monthly_regions.csv", index=False)
+    scales = pd.concat(scale_parts, ignore_index=True) if scale_parts else pd.DataFrame()
+    scales.to_parquet(out_dir / "scale_tile_months.parquet", index=False)
+
+    yt = monthly.groupby(["region", "year"], as_index=False)[cols].sum()
+    yt = yt[~yt["region"].str.contains(":")].sort_values(["region", "year"])
     yt.to_csv(out_dir / "yearly_totals.csv", index=False)
 
     # GATE: the 2012 step
@@ -442,21 +569,30 @@ def run_harmonise(settings: Settings) -> dict:
     unc = uncertainty_table(settings, fpath, measured)
     if len(unc):
         unc.to_parquet(out_dir / "l3_uncertainty.parquet", index=False)
-    anom = anomaly_test(settings, tile_deg, zone_deg, cfg.get("anomaly_rule") or {})
-
     gy = yt[yt["region"] == "global"].set_index("year")
+    prov = stamp(settings)
+    hybrid_days = int(scales["days_scaled_hybrid"].sum()) if len(scales) else 0
+    record = {"provenance": prov, "day_basis": basis_name, "fill_methods": methods, "factor_table": fpath.name,
+              "factor_resolution_deg": fdeg, "sources": {str(k): v for k, v in SOURCES.items()},
+              "scaled_tile_days_hybrid": hybrid_days,
+              "note": ("Daily rows are observations. Months with gap days left to scaling: multiply by "
+                       "scale_tile_months.multiplier of the 10-degree tile (already applied in the *_est columns).")}
+    (out_dir / "record_info.json").write_text(json.dumps(record, indent=2, default=str))
     report = {"stage": "harmonise", "resolution_deg": res25, "factor_resolution_deg": fdeg, "rows": int(rows_written),
-              "months": len(months), "rows_by_source": src_counts,
+              "months": len(months), "rows_by_source": src_counts, "day_basis": basis_name, "fill_methods": methods,
+              "tile_days_scaled_hybrid": hybrid_days,
               "gate_2012_step": {"pass": gate_pass, "tolerance_pct": tol,
                                  "global": None if glob is None else {k: glob[k] for k in glob.index if k != "region"}},
               "uncertainty_median_range_pct": (None if unc.empty else
                                                {v: float(g["range_pct"].median()) for v, g in unc.groupby("variable")}),
-              "anomaly_rule": anom,
-              "final_model_D7": ("MODIS x k per 10-degree tile and calendar month (D21) on the D19 pieces, fitted with "
-                                 "the D22+D26 mask and without D25 data-loss zone-days; S-NPP from 2012 with NOAA-20 and "
-                                 "D19 fills (D25); fallback chain tile month -> tile all year -> zone -> world")}
+              "anomaly_rule": {"note": "run by stage checks on the final factors"},
+              "final_model_D7": ("MODIS x k per 2.5-degree cell and calendar month (pulled towards its 10-degree tile; D28) "
+                                 "on the D19 pieces, fitted with the D22+D26 mask and without D25 data-loss zone-days, with "
+                                 "the version-test fit years and region choices of stage resolution; S-NPP from 2012 with "
+                                 "NOAA-20 and D19 fills by the methods of D25")}
     with pd.option_context("display.width", 220, "display.max_columns", 20, "display.max_rows", 80):
         print(f"[harmonise] L3 rows written: {rows_written:,}; by source: {src_counts}", flush=True)
+        print(f"[harmonise] tile-days left to scaling by hybrid fills: {hybrid_days:,}", flush=True)
         print("[harmonise] global yearly totals (harmonised, S-NPP scale):\n"
               + gy[["cells_h", "frp_h"]].round(0).astype("int64").to_string(), flush=True)
         print(f"[harmonise] 2012 step (mean {after[0]}-{after[-1]} / mean {before[0]}-{before[-1]}), harmonised vs MODIS alone:\n"
@@ -466,5 +602,4 @@ def run_harmonise(settings: Settings) -> dict:
         if len(unc):
             print("[harmonise] factor 95% range, median % by variable and source:\n"
                   + unc.groupby(["variable", "source"])["range_pct"].median().to_string(), flush=True)
-        print(f"[harmonise] anomaly RULE: {anom.get('adopted')} | {anom.get('why', anom.get('note'))}", flush=True)
     return report

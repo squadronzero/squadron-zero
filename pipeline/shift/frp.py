@@ -22,7 +22,7 @@ with the D19 source pieces: merged MODIS to 2019, Aqua from 2020):
                   calendar month (the fix 1 method applied to fire power)
 
 The same tests as fix 3b (leave-one-year-out, backward, forward, category agreement,
-false trend) and a pre-registered rule (settings `frp.rule`, decision D21) pick the method.
+false trend) and a rule fixed before the run (settings `frp.rule`, decision D21) pick the method.
 
     python -m shift.run --dataset global --stage frp        (after `counts`)
 """
@@ -248,5 +248,5 @@ def run_frp(settings: Settings) -> dict:
         if len(lines):
             ols = lines[lines["method"] == "ols_cellday"].pivot(index="region", columns="segment", values=["a", "b"]).round(3)
             print("[frp] straight line with intercept fitted per region (a = slope, b = intercept MW)\n" + ols.to_string(), flush=True)
-        print(f"[frp] WINNER by the pre-registered rule: {winner} ({why})", flush=True)
+        print(f"[frp] WINNER by the rule fixed before the run: {winner} ({why})", flush=True)
     return report
