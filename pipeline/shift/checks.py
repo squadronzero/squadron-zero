@@ -413,9 +413,19 @@ def event_check(settings, cfg) -> dict:
     if not p.exists() or not events:
         return {"note": "no monthly_regions.csv (rerun harmonise) or no events"}
     base_years = list(range(int(cfg.get("baseline_years", [2003, 2025])[0]), int(cfg.get("baseline_years", [2003, 2025])[1]) + 1))
-    mr = series_frame(pd.read_csv(p))
-    mr = mr[mr["region"].str.startswith("event:") & mr["year"].isin(base_years)]
+    allm = series_frame(pd.read_csv(p))
+    mr = allm[allm["region"].str.startswith("event:") & allm["year"].isin(base_years)]
     series = {"SHIFT": ("frp_h_est", "cells_h_est"), "raw stitched": ("stitched_frp", "stitched_cells"), "MODIS alone": ("MODIS_frp", "MODIS_cells")}
+    # era balance: share of unusual-or-critical months before 2012 and from 2012 in the D18 regions.
+    # MODIS alone is one sensor in both eras, so it shows the real change; a harmonised record should match it.
+    reg = allm[~allm["region"].str.contains(":") & (allm["region"] != "global") & allm["year"].isin(base_years)]
+    era = {}
+    for s_, (f_, c_) in series.items():
+        for var, col in (("frp", f_), ("cells", c_)):
+            zz = zscores(reg, col, base_years)
+            pre, post = reg["year"] < 2012, reg["year"] >= 2012
+            era[f"{s_} {var}"] = {"flagged_before_2012_pct": round(float(100 * (zz[pre] >= 1).mean()), 1),
+                                  "flagged_from_2012_pct": round(float(100 * (zz[post] >= 1).mean()), 1)}
     z = {}
     for s, (f, c) in series.items():
         z[(s, "frp")] = zscores(mr, f, base_years)
@@ -447,7 +457,7 @@ def event_check(settings, cfg) -> dict:
             zz = z[(s, var)]
             summary[f"{s} {var}"] = {"hit_rate_pct": round(float(100 * t[f"{s} {var} hit"].mean()), 1),
                                      "base_rate_pct": round(float(100 * (zz[other] >= 1).mean()), 1)}
-    return {"table": t.to_dict("records"), "summary": summary}
+    return {"table": t.to_dict("records"), "summary": summary, "era_balance_d18_regions": era}
 
 
 def runs_from(dates: np.ndarray, crit: np.ndarray, max_gap: int, min_days: int) -> list[tuple[int, int]]:
@@ -466,6 +476,33 @@ def runs_from(dates: np.ndarray, crit: np.ndarray, max_gap: int, min_days: int) 
     return [(a, b) for a, b in out if crit[a:b + 1].sum() >= min_days]
 
 
+def daily_z(v: pd.Series, by, win: int, half: int) -> tuple[pd.Series, np.ndarray]:
+    """z of log(1 + 7-day value) against the same days of year (+-half) in the OTHER baseline years."""
+    roll = v.rolling(win, min_periods=win - 1).sum() * win / v.rolling(win, min_periods=win - 1).count()
+    lv = np.log1p(roll)
+    doy = np.minimum(lv.index.dayofyear.to_numpy(), 365) - 1
+    yr = lv.index.year.to_numpy()
+    years = np.arange(by[0], by[1] + 1)
+    M = np.full((len(years), 365), np.nan)
+    inb = (yr >= by[0]) & (yr <= by[1])
+    M[yr[inb] - by[0], doy[inb]] = lv.to_numpy()[inb]
+    ok = np.isfinite(M)
+    X = np.where(ok, M, 0.0)
+    S1 = sum(np.roll(X, s, axis=1) for s in range(-half, half + 1))
+    S2 = sum(np.roll(X ** 2, s, axis=1) for s in range(-half, half + 1))
+    N = sum(np.roll(ok.astype(float), s, axis=1) for s in range(-half, half + 1))
+    T1, T2, TN = S1.sum(0), S2.sum(0), N.sum(0)
+    yi = yr - by[0]
+    own = (yi >= 0) & (yi < len(years))
+    yc = np.clip(yi, 0, len(years) - 1)
+    n = TN[doy] - np.where(own, N[yc, doy], 0)
+    mu = (T1[doy] - np.where(own, S1[yc, doy], 0)) / np.maximum(n, 1)
+    var = (T2[doy] - np.where(own, S2[yc, doy], 0)) / np.maximum(n, 1) - mu ** 2
+    z = (lv.to_numpy() - mu) / np.maximum(np.sqrt(np.maximum(var, 0)), 0.05)
+    z = np.where(np.isfinite(lv.to_numpy()) & (n >= 3 * (2 * half + 1)), z, np.nan)
+    return lv, z
+
+
 def critical_periods(settings, cfg) -> dict:
     p = settings.processed_dir / "l3" / "daily_regions.parquet"
     if not p.exists():
@@ -474,55 +511,44 @@ def critical_periods(settings, cfg) -> dict:
     win, zc, half = int(c.get("window_days", 7)), float(c.get("z", 2)), int(c.get("doy_halfwidth", 15))
     min_days, max_gap = int(c.get("min_days", 3)), int(c.get("max_gap_days", 2))
     by = [int(x) for x in cfg.get("baseline_years", [2003, 2025])]
+    switch = pd.Timestamp("2012-01-20")
     d = pd.read_parquet(p)
     d["date"] = pd.to_datetime(d["date"])
-    runs = []
+    runs, balance = [], []
     for reg, g in d.groupby("region"):
         g = g.sort_values("date").set_index("date")
-        v = g["frp_h"].where(g["no_data_share"] <= 0.5)
-        roll = v.rolling(win, min_periods=win - 1).sum() * win / v.rolling(win, min_periods=win - 1).count()
-        lv = np.log1p(roll)
-        doy = np.minimum(lv.index.dayofyear.to_numpy(), 365) - 1
-        yr = lv.index.year.to_numpy()
-        years = np.arange(by[0], by[1] + 1)
-        M = np.full((len(years), 365), np.nan)
-        inb = (yr >= by[0]) & (yr <= by[1])
-        M[yr[inb] - by[0], doy[inb]] = lv.to_numpy()[inb]
-        # window sums over +-half days (circular), per year
-        ok = np.isfinite(M)
-        X = np.where(ok, M, 0.0)
-        S1 = sum(np.roll(X, s, axis=1) for s in range(-half, half + 1))
-        S2 = sum(np.roll(X ** 2, s, axis=1) for s in range(-half, half + 1))
-        N = sum(np.roll(ok.astype(float), s, axis=1) for s in range(-half, half + 1))
-        T1, T2, TN = S1.sum(0), S2.sum(0), N.sum(0)
-        z = np.full(len(lv), np.nan)
-        for i, (y_, dd, val) in enumerate(zip(yr, doy, lv.to_numpy())):
-            if not np.isfinite(val):
+        good = g["no_data_share"] <= 0.5
+        series = {"SHIFT": g["frp_h"],
+                  "raw stitched": g["MODIS_frp"].where(g.index < switch, g["S-NPP_frp"]),
+                  "MODIS alone": g["MODIS_frp"]}
+        for sname, val in series.items():
+            lv, z = daily_z(val.where(good), by, win, half)
+            crit = np.nan_to_num(z) >= zc
+            idx = lv.index
+            inb = (idx.year >= by[0]) & (idx.year <= by[1])
+            pre, post = inb & (idx < switch), inb & (idx >= switch)
+            if not reg.startswith("event:"):
+                balance.append({"area": reg, "series": sname,
+                                "critical_days_per_year_before_2012": round(float(crit[pre].sum() / max(pre.sum(), 1) * 365.25), 1),
+                                "critical_days_per_year_from_2012": round(float(crit[post].sum() / max(post.sum(), 1) * 365.25), 1)})
+            if sname != "SHIFT":
                 continue
-            yi = y_ - by[0]
-            own = 0 <= yi < len(years)
-            n = TN[dd] - (N[yi, dd] if own else 0)
-            if n < 3 * (2 * half + 1):
-                continue
-            mu = (T1[dd] - (S1[yi, dd] if own else 0)) / n
-            var = (T2[dd] - (S2[yi, dd] if own else 0)) / n - mu ** 2
-            z[i] = (val - mu) / max(np.sqrt(max(var, 0)), 0.05)
-        crit = np.nan_to_num(z) >= zc
-        dates = lv.index.to_numpy()
-        for a, b in runs_from(dates, crit, max_gap, min_days):
-            seg = g.iloc[a:b + 1]
-            runs.append({"region": reg, "start": str(lv.index[a].date()), "end": str(lv.index[b].date()),
-                         "days": int(b - a + 1), "critical_days": int(crit[a:b + 1].sum()),
-                         "peak_date": str(lv.index[a + int(np.nanargmax(z[a:b + 1]))].date()),
-                         "peak_z": round(float(np.nanmax(z[a:b + 1])), 2), "fire_power_mw_days": round(float(seg["frp_h"].sum()), 0),
-                         "before_2012_20_jan": bool(lv.index[a] < pd.Timestamp("2012-01-20")),
-                         "max_no_data_share": round(float(seg["no_data_share"].max()), 2)})
+            for a, b in runs_from(idx.to_numpy(), crit, max_gap, min_days):
+                seg = g.iloc[a:b + 1]
+                runs.append({"region": reg, "start": str(idx[a].date()), "end": str(idx[b].date()),
+                             "days": int(b - a + 1), "critical_days": int(crit[a:b + 1].sum()),
+                             "peak_date": str(idx[a + int(np.nanargmax(z[a:b + 1]))].date()),
+                             "peak_z": round(float(np.nanmax(z[a:b + 1])), 2), "fire_power_mw_days": round(float(seg["frp_h"].sum()), 0),
+                             "before_2012_20_jan": bool(idx[a] < switch),
+                             "max_no_data_share": round(float(seg["no_data_share"].max()), 2)})
     rt = pd.DataFrame(runs)
     if len(rt):
         rt["name"] = rt["region"].str.replace("event:", "", regex=False) + " " + rt["start"] + " to " + rt["end"]
     out = settings.processed_dir / "checks"
     out.mkdir(parents=True, exist_ok=True)
     rt.to_csv(out / "critical_periods.csv", index=False)
+    bal = pd.DataFrame(balance)
+    bal.to_csv(out / "critical_days_by_era.csv", index=False)
     found = {}
     for name, e in (cfg.get("events") or {}).items():
         reg = f"event:{name}"
@@ -532,9 +558,17 @@ def critical_periods(settings, cfg) -> dict:
         hit = rt[(rt["region"] == reg) & (pd.to_datetime(rt["start"]) <= hi) & (pd.to_datetime(rt["end"]) >= lo)] if len(rt) else rt
         found[name] = hit["name"].tolist()[:3] if len(hit) else []
     per_region = rt.groupby("region").size().to_dict() if len(rt) else {}
+    era = {}
+    if len(bal):
+        t = bal[bal["area"] != "global"]
+        for sname, gg in t.groupby("series"):
+            era[sname] = {"median_before": float(gg["critical_days_per_year_before_2012"].median()),
+                          "median_from_2012": float(gg["critical_days_per_year_from_2012"].median()),
+                          "areas_more_after_than_before": f"{int((gg['critical_days_per_year_from_2012'] > gg['critical_days_per_year_before_2012']).sum())} of {len(gg)}"}
     return {"runs": int(len(rt)), "runs_per_area": per_region,
             "events_found_as_dated_runs": found,
-            "event_detection_rate_pct": round(float(100 * np.mean([bool(v) for v in found.values()])), 1) if found else None}
+            "event_detection_rate_pct": round(float(100 * np.mean([bool(v) for v in found.values()])), 1) if found else None,
+            "critical_days_by_era": era, "by_era_table": bal.to_dict("records")}
 
 
 # ---------------------------------------------------------------- 7. burned area
@@ -578,8 +612,13 @@ def gfed_check(settings, cfg) -> dict:
             row[f"{var}_step_modis_alone"] = round(step(f"MODIS_{var}", b_yrs, a_yrs), 3)
             row[f"{var}_largest_other_year_step_modis"] = round(float(np.exp(max(plac))), 3) if plac else None
             row[f"{var}_pass"] = bool(plac) and abs(np.log(h)) <= max(plac)
+            # what harmonisation itself adds at 2012 (SHIFT's ratio step against MODIS alone's)
+            row[f"{var}_harmonisation_effect_pct"] = round(100 * (h / step(f"MODIS_{var}", b_yrs, a_yrs) - 1), 1)
+            row[f"{var}_modis_alone_pass"] = bool(plac) and abs(np.log(step(f"MODIS_{var}", b_yrs, a_yrs))) <= max(plac)
         rows.append(row)
     t = pd.DataFrame(rows)
+    if len(t):                                   # two events may share one box: keep the first
+        t = t.assign(_k=t.drop(columns="region").round(4).astype(str).agg("|".join, axis=1)).drop_duplicates("_k").drop(columns="_k")
     glob = t[t["region"] == "global"]
     verdict = bool(len(glob) and glob["frp_pass"].iloc[0] and glob["cells_pass"].iloc[0])
     reg = t[(t["region"] != "global") & ~t["region"].str.startswith("event:")]
@@ -632,6 +671,48 @@ def cloud_check(settings, cubes, ref, loyo_frp: pd.DataFrame, cells, weights, cf
     return {"scaling_error_by_cloud_pct": err, "cloudy_share_all_months_pct": None if base_rate is None else round(base_rate, 1),
             "cloudy_share_low_months_pct": None if low_rate is None else round(low_rate, 1),
             "flag_shown": adopt, "rule": f"flag shown if low months are cloudy at least {min_ratio:g} times as often as all months"}
+
+
+# ---------------------------------------------------------------- 9. diagnostics for the 2026 result
+
+def satellite_ratios(settings, cubes, ref) -> dict:
+    """Each partner satellite per S-NPP, whole world, by year (2018 onwards) and by month of the
+    last year: a drifting orbit shows as a trend, a change of data stream as a step. Also counts
+    how much of the record leans on the Aqua piece (D19 fills from 2020). Read-only: the stored
+    2026 test is not touched."""
+    out = {}
+    for var in ("cells", "frp"):
+        c = cubes[var]
+        if ref not in c.A:
+            continue
+        ys = [y for y in c.years if y >= 2018]
+        for grp in ("Aqua", "Terra", "NOAA-20"):
+            if grp not in c.A or not ys:
+                continue
+            yr, mo = {}, {}
+            for y in ys:
+                j = c.years.index(y)
+                both = c.avail[grp][:, j] & c.avail[ref][:, j]
+                r = c.A[ref][:, both, j].sum()
+                if r > 0:
+                    yr[int(y)] = round(float(c.A[grp][:, both, j].sum() / r), 4)
+            j = c.years.index(ys[-1])
+            for m in range(12):
+                if c.avail[grp][m, j] and c.avail[ref][m, j] and c.A[ref][:, m, j].sum() > 0:
+                    mo[f"{ys[-1]}-{m + 1:02d}"] = round(float(c.A[grp][:, m, j].sum() / c.A[ref][:, m, j].sum()), 4)
+            out[f"{grp} per {ref} ({var})"] = {"by_year": yr, "last_year_by_month": mo}
+    rows = {}
+    l3 = settings.processed_dir / "l3"
+    for part in sorted(l3.glob("year=*/month=*/part.parquet")):
+        y = int(part.parent.parent.name.split("=")[1])
+        if y < 2020:
+            continue
+        src = pd.read_parquet(part, columns=["src"])["src"]
+        rows.setdefault(y, {"all": 0, "D19 MODIS fill": 0})
+        rows[y]["all"] += int(len(src))
+        rows[y]["D19 MODIS fill"] += int((src == 2).sum())
+    out["record_rows_from_aqua_fill_by_year"] = rows
+    return out
 
 
 # ---------------------------------------------------------------- the stage
@@ -699,6 +780,15 @@ def run_checks(settings: Settings) -> dict:
     report["critical_periods"] = part("6 dated critical periods", lambda: critical_periods(settings, cfg))
     report["burned_area"] = part("7 GFED burned area", lambda: gfed_check(settings, cfg))
     report["cloud"] = part("8 cloud", lambda: cloud_check(settings, cubes, ref, loyo_frp, cells, weights, cfg, years, fine))
+    report["satellite_ratios"] = part("9 satellite ratios", lambda: satellite_ratios(settings, cubes, ref))
+    # the 2026 result goes into the record's own notes, whatever it is
+    ri = settings.processed_dir / "l3" / "record_info.json"
+    ft0 = report["final_test_2026"] or {}
+    if ri.exists() and "predictors" in ft0:
+        info = json.loads(ri.read_text())
+        info["final_test_2026"] = {k: {"pass": v.get("pass"), "global_error_pct": {x: (v.get(x) or {}).get("global_error_pct") for x in ("cells", "frp")}}
+                                   for k, v in ft0["predictors"].items()}
+        ri.write_text(json.dumps(info, indent=2, default=str))
 
     # earlier stages of this package, read back for one summary
     def rep(name):
@@ -714,7 +804,7 @@ def run_checks(settings: Settings) -> dict:
                       "flagged": [(f["region"], f["step_gap_pct"]) for f in (res.get("region_test") or {}).get("flags", [])]},
         "gate 2012": (har.get("gate_2012_step") or {}).get("pass"),
         "MF1 anomaly": anom.get("adopted") if isinstance(anom, dict) else None,
-        "MF4 2026 test": (report["final_test_2026"] or {}).get("pass"),
+        "MF4 2026 test": {k: v.get("pass") for k, v in ((report["final_test_2026"] or {}).get("predictors") or {}).items()},
         "MF5 ranges recalibrated": (report["coverage"] or {}).get("accepted"),
         "MF7 events hit (SHIFT frp)": ((report["known_events"] or {}).get("summary") or {}).get("SHIFT frp"),
         "D events as dated runs": (report["critical_periods"] or {}).get("event_detection_rate_pct"),
@@ -727,6 +817,8 @@ def run_checks(settings: Settings) -> dict:
     with pd.option_context("display.width", 240, "display.max_columns", 30, "display.max_rows", 80):
         a = report["anomaly_rule"]
         print(f"[checks] 1 ANOMALY RULE: {a.get('adopted')} | {a.get('why', a.get('error', a.get('note')))}", flush=True)
+        print(f"[checks] 1 regions (D18, each region-month once): {json.dumps(a.get('regions'), default=str)}; "
+              f"fine-scale spread sensitivity: {json.dumps(a.get('sensitivity_fine_sigma'), default=str)}", flush=True)
         ft = report["final_test_2026"]
         print(f"[checks] 2 FINAL 2026 TEST: {'PASS' if ft.get('pass') else 'FAIL'} {json.dumps(ft.get('predictors', ft), default=str)}", flush=True)
         print(f"[checks] 3 COVERAGE: {json.dumps(report['coverage'], default=str)}", flush=True)
@@ -736,13 +828,20 @@ def run_checks(settings: Settings) -> dict:
         if "table" in ke:
             print("[checks] 5 KNOWN EVENTS:\n" + pd.DataFrame(ke["table"]).to_string(index=False), flush=True)
             print(f"[checks] 5 hit rates: {json.dumps(ke['summary'])}", flush=True)
+            print("[checks] 5 era balance, D18 regions (share of months unusual or critical):\n"
+                  + pd.DataFrame(ke["era_balance_d18_regions"]).T.to_string(), flush=True)
         else:
             print(f"[checks] 5 KNOWN EVENTS: {ke}", flush=True)
-        print(f"[checks] 6 DATED CRITICAL PERIODS: {json.dumps(report['critical_periods'], default=str)}", flush=True)
+        cpr = report["critical_periods"]
+        print(f"[checks] 6 DATED CRITICAL PERIODS: {json.dumps({k: v for k, v in cpr.items() if k != 'by_era_table'}, default=str)}", flush=True)
+        if cpr.get("by_era_table"):
+            print("[checks] 6 critical days per year by era (same rule on three series):\n"
+                  + pd.DataFrame(cpr["by_era_table"]).pivot(index="area", columns="series").to_string(), flush=True)
         ba = report["burned_area"]
         if "table" in ba:
             print("[checks] 7 BURNED AREA ratio steps at 2012:\n" + pd.DataFrame(ba["table"]).to_string(index=False), flush=True)
         print(f"[checks] 7 global pass: {ba.get('global_pass')}; regions: {ba.get('regions_passing_both')} {ba.get('note', ba.get('error', ''))}", flush=True)
         print(f"[checks] 8 CLOUD: {json.dumps(report['cloud'], default=str)}", flush=True)
+        print(f"[checks] 9 SATELLITE RATIOS: {json.dumps(report['satellite_ratios'], default=str)}", flush=True)
         print("[checks] PHASE 2 SUMMARY:\n" + "\n".join(f"  {k}: {v}" for k, v in summary.items()), flush=True)
     return report

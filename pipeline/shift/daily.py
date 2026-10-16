@@ -195,17 +195,26 @@ def run_daily(settings: Settings) -> dict:
             full = pd.MultiIndex.from_product([units, valid[basis]], names=["unit", "date"])
             x = x.set_index(["unit", "date"]).reindex(full, fill_value=0.0).reset_index()
             w = x.groupby("unit")["cells_real"].sum()
+            if unit_type == "region":
+                # every region counts once (the world's daily total would otherwise outweigh them all);
+                # the world is reported on its own line
+                w = pd.Series(np.where(w.index == "global", 0.0, 1.0), index=w.index)
             for scale in SCALES:
                 xs = x.assign(period=period_of(x["date"], scale)).groupby(["unit", "period"], as_index=False)[vals].sum()
                 for var in ("cells", "frp"):
                     um = unit_metrics(xs.rename(columns={f"{var}_pred": "pred", f"{var}_real": "real"})[["unit", "period", "pred", "real"]])
                     ww = w.reindex(um.index).fillna(0)
-                    summary.append({"basis": basis, "units": unit_type, "scale": scale, "variable": var, "n": int(len(um)),
+                    summary.append({"basis": basis, "units": unit_type, "scale": scale, "variable": var, "n": int((ww > 0).sum()),
                                     "fw_median_error_pct": None if wmedian(um["error_pct"], ww) is None else round(wmedian(um["error_pct"], ww), 1),
                                     "fw_mean_corr": round(float(np.average(um["corr"].fillna(0), weights=ww)), 3) if ww.sum() else None,
                                     "fw_detection_pct": round(float(np.average(um["detection_pct"].fillna(0), weights=ww)), 1) if ww.sum() else None})
                     if unit_type == "region":
                         per_region.append(um.reset_index().assign(basis=basis, scale=scale, variable=var))
+                        if "global" in um.index:
+                            gm = um.loc["global"]
+                            summary.append({"basis": basis, "units": "world", "scale": scale, "variable": var, "n": 1,
+                                            "fw_median_error_pct": round(float(gm["error_pct"]), 1),
+                                            "fw_mean_corr": round(float(gm["corr"]), 3), "fw_detection_pct": round(float(gm["detection_pct"]), 1)})
     sm = pd.DataFrame(summary)
     out = settings.processed_dir / "daily"
     out.mkdir(parents=True, exist_ok=True)

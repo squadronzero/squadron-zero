@@ -139,6 +139,10 @@ def test_package_end_to_end(tmp_path):
     assert ev["table"][0]["SHIFT frp hit"] is True                                      # the burst is found
     cp = c["critical_periods"]
     assert cp["events_found_as_dated_runs"]["burst_a"], cp                              # ... as a dated run
+    assert {"SHIFT", "raw stitched", "MODIS alone"} <= set(cp["critical_days_by_era"])
+    assert "era_balance_d18_regions" in ev and "SHIFT frp" in ev["era_balance_d18_regions"]
+    assert "record_rows_from_aqua_fill_by_year" in c["satellite_ratios"]
+    assert "final_test_2026" in json.loads((s.processed_dir / "l3" / "record_info.json").read_text())
     assert "note" in c["burned_area"] and "note" in c["cloud"]                         # no outside data yet
 
     # outside data as stage external writes it: burned area that follows the (steady) true fire,
@@ -241,3 +245,64 @@ def test_provenance_stamp(tmp_path):
     s2 = load_settings()
     s2.raw["factors"]["seed"] = 999
     assert settings_hash(s2.raw) != st["settings_sha256"]
+
+
+def test_retry_recovers_from_server_errors():
+    from shift.external import _retry
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("Status code: 502")
+        return "ok"
+    assert _retry(flaky, "test", waits=(0, 0, 0)) == "ok" and len(calls) == 3
+    import pytest
+    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+        _retry(lambda: (_ for _ in ()).throw(RuntimeError("502")), "test", waits=(0, 0))
+
+
+def test_merra_resumes_and_never_leaves_a_partial_table(tmp_path, monkeypatch):
+    import pytest
+    h5py = pytest.importorskip("h5py")
+    import shift.external as ex
+    monkeypatch.setattr(ex.time, "sleep", lambda s: None)
+    s = load_settings()
+    s = type(s)(raw={**s.raw, "dataset": "global"}, root=tmp_path)
+    (s.processed_dir / "external").mkdir(parents=True)
+    urls = [f"https://data.gesdisc.earthdata.nasa.gov/data/MERRA2_MONTHLY/M2TMNXRAD.5.12.4/2003/MERRA2_300.tavgM_2d_rad_Nx.2003{m:02d}.nc4"
+            for m in (1, 2, 3)]
+    state = {"bad": True}
+
+    class G:
+        def __init__(self, u): self.u = u
+        def data_links(self, access=None): return [self.u]
+
+    class Fake:
+        def search_data(self, **kw): return [G(u) for u in urls]
+        def get_requests_https_session(self):
+            class S:
+                def get(self, *a, **k): raise ConnectionError("no opendap here")
+            return S()
+        def download(self, batch, path):
+            if state["bad"] and batch[0].endswith("200302.nc4"):
+                raise RuntimeError("Download failed. Status code: 502")
+            out = []
+            for u in batch:
+                p = tmp_path / "dl" / u.rsplit("/", 1)[1]
+                p.parent.mkdir(exist_ok=True)
+                with h5py.File(p, "w") as f:
+                    f["CLDTOT"] = np.full((1, 361, 576), 0.5, "f4")
+                    f["lat"] = np.linspace(-90, 90, 361)
+                    f["lon"] = np.arange(576) * 0.625 - 180
+                out.append(str(p))
+            return out
+    cfg = {"years": [2003, 2003], "cell_deg": 2.5}
+    r1 = ex.merra(s, cfg, Fake(), tmp_path)
+    assert "error" in r1 and len(r1["failed"]) == 1                     # Feb failed every retry
+    assert not (s.processed_dir / "external" / "cloud_monthly_fine.parquet").exists()
+    state["bad"] = False
+    r2 = ex.merra(s, cfg, Fake(), tmp_path)
+    assert r2["months"] == 3 and r2["fetched"]["already done"] == 2 and r2["fetched"]["file"] == 1
+    c = pd.read_parquet(s.processed_dir / "external" / "cloud_monthly_fine.parquet")
+    assert np.isclose(c["cloud"].mean(), 0.5)

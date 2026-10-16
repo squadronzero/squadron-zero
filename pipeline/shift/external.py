@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -126,7 +127,7 @@ def gfed(settings: Settings, cfg: dict, earthaccess, tmp: Path) -> dict:
     print(f"[external] GFED4 burned area: {len(links)} monthly files", flush=True)
     for i in range(0, len(links), 24):
         batch = links[i:i + 24]
-        paths = earthaccess.download(batch, str(tmp))
+        paths = _retry(lambda: earthaccess.download(batch, str(tmp)), f"GFED batch {i // 24 + 1}")
         for p in map(Path, paths):
             mt = GFED_PATTERN.search(p.name)
             if not mt:
@@ -139,6 +140,9 @@ def gfed(settings: Settings, cfg: dict, earthaccess, tmp: Path) -> dict:
             p.unlink()
         print(f"[external] GFED {min(i + 24, len(links))}/{len(links)}", flush=True)
     reg = pd.DataFrame(reg_rows)
+    got = reg[["year", "month"]].drop_duplicates().shape[0] if len(reg) else 0
+    if got != len(links):              # a download that silently returned fewer files must not pass
+        raise RuntimeError(f"GFED: {got} of {len(links)} months read; run the stage again with --force")
     fine = pd.concat(fine_rows, ignore_index=True).rename(columns={"value": "ba_ha"})
     unit = pick_unit(reg[reg["region"] == "global"].groupby("year")["ba_ha"].sum(), 200, 600)
     reg["ba_ha"] *= unit
@@ -151,24 +155,43 @@ def gfed(settings: Settings, cfg: dict, earthaccess, tmp: Path) -> dict:
             "source": "GFED4.0 monthly burned area without small fires, ORNL DAAC doi:10.3334/ORNLDAAC/1293"}
 
 
-def _merra_field(session, url: str, var: str, tmp: Path, earthaccess) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """CLDTOT, lat, lon of one monthly file: an OPeNDAP subset (about 1 MB) when the server allows
-    it, otherwise the whole file."""
+def _retry(fn, what: str, waits=(5, 15, 30, 60, 120, 240)):
+    """Run fn(); on failure wait and try again (NASA servers sometimes answer 502/503 for a while)."""
+    last = None
+    for i, w in enumerate((0,) + tuple(waits)):
+        if w:
+            print(f"[external] {what}: attempt {i + 1} after {w} s ({type(last).__name__}: {str(last)[:120]})", flush=True)
+            time.sleep(w)
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            last = e
+    raise RuntimeError(f"{what} failed after {len(waits) + 1} attempts: {type(last).__name__}: {last}")
+
+
+def _merra_field(session, url: str, var: str, tmp: Path, earthaccess) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
+    """CLDTOT, lat, lon of one monthly file and how it was fetched: an OPeNDAP subset (about 1 MB)
+    when the server allows it, otherwise the whole file (both retried on server errors)."""
     import h5py
     p = tmp / "merra.nc4"
     od = url.replace("https://data.gesdisc.earthdata.nasa.gov/data/", "https://goldsmr4.gesdisc.eosdis.nasa.gov/opendap/")
-    ok = False
+    how = None
     if od != url:
         try:
             r = session.get(f"{od}.nc4?{var},lat,lon", timeout=120)
             if r.status_code == 200 and r.content[:4] == b"\x89HDF":
                 p.write_bytes(r.content)
-                ok = True
+                how = "opendap"
         except Exception:  # noqa: BLE001 - fall back to the whole file
-            ok = False
-    if not ok:
-        got = earthaccess.download([url], str(tmp))
-        p = Path(got[0])
+            how = None
+    if how is None:
+        def full():
+            got = earthaccess.download([url], str(tmp))
+            if not got:
+                raise RuntimeError("no file returned")
+            return Path(got[0])
+        p = _retry(full, f"MERRA-2 {Path(url).name}")
+        how = "file"
     with h5py.File(p, "r") as f:
         a = np.asarray(f[var][...], float).squeeze()
         lat, lon = np.asarray(f["lat"][...], float), np.asarray(f["lon"][...], float)
@@ -176,33 +199,52 @@ def _merra_field(session, url: str, var: str, tmp: Path, earthaccess) -> tuple[n
     p.unlink()
     if fill is not None:
         a = np.where(np.isclose(a, np.asarray(fill).ravel()[0]), np.nan, a)
-    return a, lat, lon
+    return a, lat, lon, how
 
 
 def merra(settings: Settings, cfg: dict, earthaccess, tmp: Path) -> dict:
+    """Month by month into external/merra_parts/ (a rerun skips months already done), then one table."""
     y0, y1 = (int(v) for v in cfg.get("years", [2003, 2026]))
     deg = float(cfg.get("cell_deg", 2.5))
     var = str(cfg.get("variable", "CLDTOT"))
-    links = [u for u in _links(earthaccess, cfg.get("short_name", "M2TMNXRAD"), str(cfg.get("version", "5.12.4")), y0, y1)
-             if MERRA_PATTERN.search(u)]
+    links = _retry(lambda: [u for u in _links(earthaccess, cfg.get("short_name", "M2TMNXRAD"), str(cfg.get("version", "5.12.4")), y0, y1)
+                            if MERRA_PATTERN.search(u)], "MERRA-2 search")
     if not links:
         return {"note": "no MERRA-2 files found"}
+    parts = settings.processed_dir / "external" / "merra_parts"
+    parts.mkdir(parents=True, exist_ok=True)
     session = earthaccess.get_requests_https_session()
-    rows = []
+    how, failed = {"opendap": 0, "file": 0, "already done": 0}, []
     print(f"[external] MERRA-2 {var}: {len(links)} monthly files", flush=True)
     for i, u in enumerate(links):
         mt = MERRA_PATTERN.search(u)
         y, mo = int(mt.group(1)), int(mt.group(2))
-        a, lat, lon = _merra_field(session, u, var, tmp, earthaccess)
-        rows.append(to_fine(a, lat, lon, deg, "mean").rename(columns={"value": "cloud"}).assign(year=y, month=mo))
+        pp = parts / f"{y:04d}{mo:02d}.parquet"
+        if pp.exists():
+            how["already done"] += 1
+            continue
+        try:
+            a, lat, lon, h = _merra_field(session, u, var, tmp, earthaccess)
+        except Exception as e:  # noqa: BLE001 - record and go on; a rerun picks the month up again
+            failed.append(f"{y:04d}-{mo:02d}: {str(e)[:160]}")
+            continue
+        how[h] += 1
+        to_fine(a, lat, lon, deg, "mean").rename(columns={"value": "cloud"}).assign(year=y, month=mo).to_parquet(pp, index=False)
         if (i + 1) % 24 == 0:
-            print(f"[external] MERRA-2 {i + 1}/{len(links)}", flush=True)
-    c = pd.concat(rows, ignore_index=True)
+            print(f"[external] MERRA-2 {i + 1}/{len(links)} ({how})", flush=True)
+    files = sorted(parts.glob("*.parquet"))
+    if not files:
+        return {"error": "no MERRA-2 month could be read", "failed": failed}
+    c = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
     if not (0 <= c["cloud"].min() and c["cloud"].max() <= 1.0001):
         raise ValueError(f"{var} outside 0-1: {c['cloud'].min()} to {c['cloud'].max()}")
+    if failed:                           # never leave a table that looks complete when it is not
+        (settings.processed_dir / "external" / "cloud_monthly_fine.parquet").unlink(missing_ok=True)
+        return {"error": f"{len(failed)} of {len(links)} months failed after retries: run the stage again "
+                         "(finished months are kept)", "failed": failed[:10], "fetched": how}
     c.to_parquet(settings.processed_dir / "external" / "cloud_monthly_fine.parquet", index=False)
     return {"files": len(links), "variable": var, "mean_cloud": round(float(c["cloud"].mean()), 3),
-            "months": int(c[["year", "month"]].drop_duplicates().shape[0]),
+            "months": int(c[["year", "month"]].drop_duplicates().shape[0]), "fetched": how,
             "source": "MERRA-2 M2TMNXRAD v5.12.4 CLDTOT (GMAO), NASA GES DISC"}
 
 
