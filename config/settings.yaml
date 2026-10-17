@@ -457,6 +457,21 @@ phase2_checks:
     doy_halfwidth: 15
     min_days: 3
     max_gap_days: 2
+    # Added 17 Oct 2026 after the first checks run showed the daily SHIFT record with about twice
+    # MODIS alone's critical days before 2012 and about half after (the monthly record is
+    # balanced). RULE FIXED 17 Oct 2026 BEFORE THE RUN (committed to git): three ways of building
+    # the daily normal are compared: pooled (one normal from all baseline years, as before),
+    # era_sd (pooled mean, spread from the same era's years only: MODIS x k and S-NPP have
+    # different day-to-day noise) and era_normal (mean and spread from the same era). Each is
+    # scored on the stable-MODIS window reference_years (Terra and Aqua both on station until
+    # 2019, D19): per area (D18 regions and the world), the ratio of critical days per year
+    # before / from 20 Jan 2012 (each + 0.5) for SHIFT against the same ratio for MODIS alone
+    # (one sensor, pooled normal); score = median over areas of |log(SHIFT ratio / MODIS ratio)|.
+    # The lowest score wins only if it beats pooled by more than min_gain and the known events
+    # found as dated runs do not fall; otherwise pooled stays.
+    era_variants: [pooled, era_sd, era_normal]
+    reference_years: [2003, 2019]
+    min_gain: 0.05
   gfed:
     # the record / burned-area ratio may step at 2012 (after / before) by no more than MODIS
     # alone's ratio steps at any other year (same 3-year windows), for both variables.

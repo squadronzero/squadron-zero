@@ -424,8 +424,13 @@ def event_check(settings, cfg) -> dict:
         for var, col in (("frp", f_), ("cells", c_)):
             zz = zscores(reg, col, base_years)
             pre, post = reg["year"] < 2012, reg["year"] >= 2012
+            ref_y = list(range(2003, 2020))
+            sub = reg[reg["year"].isin(ref_y)]
+            z2 = zscores(sub, col, ref_y)
             era[f"{s_} {var}"] = {"flagged_before_2012_pct": round(float(100 * (zz[pre] >= 1).mean()), 1),
-                                  "flagged_from_2012_pct": round(float(100 * (zz[post] >= 1).mean()), 1)}
+                                  "flagged_from_2012_pct": round(float(100 * (zz[post] >= 1).mean()), 1),
+                                  "2003_2019_before_pct": round(float(100 * (z2[sub["year"] < 2012] >= 1).mean()), 1),
+                                  "2003_2019_from_2012_pct": round(float(100 * (z2[sub["year"] >= 2012] >= 1).mean()), 1)}
     z = {}
     for s, (f, c) in series.items():
         z[(s, "frp")] = zscores(mr, f, base_years)
@@ -476,8 +481,11 @@ def runs_from(dates: np.ndarray, crit: np.ndarray, max_gap: int, min_days: int) 
     return [(a, b) for a, b in out if crit[a:b + 1].sum() >= min_days]
 
 
-def daily_z(v: pd.Series, by, win: int, half: int) -> tuple[pd.Series, np.ndarray]:
-    """z of log(1 + 7-day value) against the same days of year (+-half) in the OTHER baseline years."""
+def daily_z(v: pd.Series, by, win: int, half: int, mode: str = "pooled",
+            switch: pd.Timestamp = pd.Timestamp("2012-01-20")) -> tuple[pd.Series, np.ndarray]:
+    """z of log(1 + 7-day value) against the same days of year (+-half) in the OTHER baseline years.
+    mode pooled: mean and spread from all baseline years; era_sd: pooled mean, spread from the
+    baseline years of the day's own era; era_normal: mean and spread from its own era."""
     roll = v.rolling(win, min_periods=win - 1).sum() * win / v.rolling(win, min_periods=win - 1).count()
     lv = np.log1p(roll)
     doy = np.minimum(lv.index.dayofyear.to_numpy(), 365) - 1
@@ -491,16 +499,46 @@ def daily_z(v: pd.Series, by, win: int, half: int) -> tuple[pd.Series, np.ndarra
     S1 = sum(np.roll(X, s, axis=1) for s in range(-half, half + 1))
     S2 = sum(np.roll(X ** 2, s, axis=1) for s in range(-half, half + 1))
     N = sum(np.roll(ok.astype(float), s, axis=1) for s in range(-half, half + 1))
-    T1, T2, TN = S1.sum(0), S2.sum(0), N.sum(0)
     yi = yr - by[0]
     own = (yi >= 0) & (yi < len(years))
     yc = np.clip(yi, 0, len(years) - 1)
-    n = TN[doy] - np.where(own, N[yc, doy], 0)
-    mu = (T1[doy] - np.where(own, S1[yc, doy], 0)) / np.maximum(n, 1)
-    var = (T2[doy] - np.where(own, S2[yc, doy], 0)) / np.maximum(n, 1) - mu ** 2
+    o1, o2, on = (np.where(own, A[yc, doy], 0) for A in (S1, S2, N))
+
+    def stats(sel_years):
+        T1, T2, TN = S1[sel_years].sum(0), S2[sel_years].sum(0), N[sel_years].sum(0)
+        return T1, T2, TN
+
+    def mu_var(T, inside):
+        T1, T2, TN = T
+        n = TN[doy] - np.where(inside, on, 0)
+        mu = (T1[doy] - np.where(inside, o1, 0)) / np.maximum(n, 1)
+        var = (T2[doy] - np.where(inside, o2, 0)) / np.maximum(n, 1) - mu ** 2
+        return mu, var, n
+    allyrs = np.ones(len(years), bool)
+    mu_p, var_p, n_p = mu_var(stats(allyrs), own)
+    if mode == "pooled":
+        mu, var, n = mu_p, var_p, n_p
+    else:
+        late_year = years >= switch.year                   # 2012 counts as an S-NPP year
+        late_day = lv.index.to_numpy() >= switch.to_datetime64()
+        own_late = own & (yr >= switch.year)
+        own_early = own & (yr < switch.year)
+        mu_l, var_l, n_l = mu_var(stats(late_year), own_late)
+        mu_e, var_e, n_e = mu_var(stats(~late_year), own_early)
+        mu_era, var_era, n_era = (np.where(late_day, a_, b_) for a_, b_ in ((mu_l, mu_e), (var_l, var_e), (n_l, n_e)))
+        if mode == "era_sd":                               # spread of the era around its own mean
+            mu, var, n = mu_p, var_era, np.minimum(n_p, n_era)
+        else:
+            mu, var, n = mu_era, var_era, n_era
     z = (lv.to_numpy() - mu) / np.maximum(np.sqrt(np.maximum(var, 0)), 0.05)
     z = np.where(np.isfinite(lv.to_numpy()) & (n >= 3 * (2 * half + 1)), z, np.nan)
     return lv, z
+
+
+def crit_per_year(idx: pd.DatetimeIndex, crit: np.ndarray, lo, mid, hi) -> tuple[float, float]:
+    pre = (idx >= lo) & (idx < mid)
+    post = (idx >= mid) & (idx <= hi)
+    return (float(crit[pre].sum() / max(pre.sum(), 1) * 365.25), float(crit[post].sum() / max(post.sum(), 1) * 365.25))
 
 
 def critical_periods(settings, cfg) -> dict:
@@ -511,26 +549,92 @@ def critical_periods(settings, cfg) -> dict:
     win, zc, half = int(c.get("window_days", 7)), float(c.get("z", 2)), int(c.get("doy_halfwidth", 15))
     min_days, max_gap = int(c.get("min_days", 3)), int(c.get("max_gap_days", 2))
     by = [int(x) for x in cfg.get("baseline_years", [2003, 2025])]
+    ref_by = [int(x) for x in c.get("reference_years", [2003, 2019])]
+    variants = list(c.get("era_variants", ["pooled"]))
+    min_gain = float(c.get("min_gain", 0.05))
     switch = pd.Timestamp("2012-01-20")
     d = pd.read_parquet(p)
     d["date"] = pd.to_datetime(d["date"])
-    runs, balance = [], []
+    events = cfg.get("events") or {}
+    areas = {}
     for reg, g in d.groupby("region"):
         g = g.sort_values("date").set_index("date")
         good = g["no_data_share"] <= 0.5
-        series = {"SHIFT": g["frp_h"],
-                  "raw stitched": g["MODIS_frp"].where(g.index < switch, g["S-NPP_frp"]),
-                  "MODIS alone": g["MODIS_frp"]}
-        for sname, val in series.items():
-            lv, z = daily_z(val.where(good), by, win, half)
+        areas[reg] = (g, {"SHIFT": g["frp_h"].where(good),
+                          "raw stitched": g["MODIS_frp"].where(g.index < switch, g["S-NPP_frp"]).where(good),
+                          "MODIS alone": g["MODIS_frp"].where(good)})
+
+    def runs_for(reg, mode, base):
+        g, ser = areas[reg]
+        lv, z = daily_z(ser["SHIFT"], base, win, half, mode, switch)
+        crit = np.nan_to_num(z) >= zc
+        return lv.index, z, crit
+
+    def events_found(mode):
+        found = {}
+        for name, e in events.items():
+            reg = f"event:{name}"
+            if reg not in areas:
+                continue
+            idx, z, crit = runs_for(reg, mode, by)
+            ms = sorted(e["months"])
+            lo, hi = pd.Timestamp(ms[0] + "-01"), pd.Timestamp(ms[-1] + "-01") + pd.offsets.MonthEnd(0)
+            found[name] = [f"{name} {idx[a].date()} to {idx[b].date()}" for a, b in runs_from(idx.to_numpy(), crit, max_gap, min_days)
+                           if idx[a] <= hi and idx[b] >= lo][:3]
+        return found
+
+    # ---- which daily normal (rule fixed before the run): judged on the stable-MODIS window
+    lo, hi = pd.Timestamp(f"{ref_by[0]}-01-01"), pd.Timestamp(f"{ref_by[1]}-12-31")
+    plain = [r for r in areas if not r.startswith("event:")]
+    ref = {}
+    for reg in plain:
+        g, ser = areas[reg]
+        lv, z = daily_z(ser["MODIS alone"], ref_by, win, half, "pooled", switch)
+        b_, a_ = crit_per_year(lv.index, np.nan_to_num(z) >= zc, lo, switch, hi)
+        ref[reg] = (b_ + 0.5) / (a_ + 0.5)
+    score_rows, detect = [], {}
+    for mode in variants + ["raw stitched (pooled)"]:
+        devs = []
+        for reg in plain:
+            g, ser = areas[reg]
+            v = ser["raw stitched"] if mode.startswith("raw") else ser["SHIFT"]
+            lv, z = daily_z(v, ref_by, win, half, "pooled" if mode.startswith("raw") else mode, switch)
+            b_, a_ = crit_per_year(lv.index, np.nan_to_num(z) >= zc, lo, switch, hi)
+            devs.append(abs(np.log(((b_ + 0.5) / (a_ + 0.5)) / ref[reg])))
+        row = {"variant": mode, "score_median_abs_log_ratio": round(float(np.median(devs)), 3)}
+        if not mode.startswith("raw"):
+            detect[mode] = events_found(mode)
+            row["events_found"] = int(sum(bool(v) for v in detect[mode].values()))
+        score_rows.append(row)
+    sc = pd.DataFrame(score_rows)
+    cand = sc[sc["variant"].isin(variants)].set_index("variant")
+    best = cand["score_median_abs_log_ratio"].idxmin()
+    chosen = "pooled"
+    if (best != "pooled" and cand.loc["pooled", "score_median_abs_log_ratio"] - cand.loc[best, "score_median_abs_log_ratio"] > min_gain
+            and cand.loc[best, "events_found"] >= cand.loc["pooled", "events_found"]):
+        chosen = best
+    why = (f"{best}: score {cand.loc[best, 'score_median_abs_log_ratio']} vs pooled {cand.loc['pooled', 'score_median_abs_log_ratio']} "
+           f"(needed lower by more than {min_gain:g}); events found {cand.loc[best, 'events_found']} vs {cand.loc['pooled', 'events_found']}")
+
+    # ---- production: dated runs with the chosen normal over the whole baseline
+    runs, balance, edge = [], [], []
+    for reg, (g, ser) in areas.items():
+        for sname in ("SHIFT", "raw stitched", "MODIS alone"):
+            mode = chosen if sname == "SHIFT" else "pooled"
+            lv, z = daily_z(ser[sname], by, win, half, mode, switch)
             crit = np.nan_to_num(z) >= zc
             idx = lv.index
-            inb = (idx.year >= by[0]) & (idx.year <= by[1])
-            pre, post = inb & (idx < switch), inb & (idx >= switch)
             if not reg.startswith("event:"):
-                balance.append({"area": reg, "series": sname,
-                                "critical_days_per_year_before_2012": round(float(crit[pre].sum() / max(pre.sum(), 1) * 365.25), 1),
-                                "critical_days_per_year_from_2012": round(float(crit[post].sum() / max(post.sum(), 1) * 365.25), 1)})
+                b1, a1 = crit_per_year(idx, crit, pd.Timestamp(f"{by[0]}-01-01"), switch, pd.Timestamp(f"{by[1]}-12-31"))
+                b2, a2 = crit_per_year(idx, crit, lo, switch, hi)
+                balance.append({"area": reg, "series": sname, "before_2012": round(b1, 1), f"from_2012_to_{by[1]}": round(a1, 1),
+                                f"from_2012_to_{ref_by[1]}": round(a2, 1)})
+                if sname == "SHIFT":
+                    near = (idx.day <= 3) | (idx.day >= idx.days_in_month - 2)
+                    for era_name, m in (("before 2012", idx < switch), ("from 2012", idx >= switch)):
+                        if crit[m].sum():
+                            edge.append({"area": reg, "era": era_name,
+                                         "critical_days_at_month_edges_pct": round(float(100 * crit[m & near].sum() / crit[m].sum()), 1)})
             if sname != "SHIFT":
                 continue
             for a, b in runs_from(idx.to_numpy(), crit, max_gap, min_days):
@@ -539,7 +643,7 @@ def critical_periods(settings, cfg) -> dict:
                              "days": int(b - a + 1), "critical_days": int(crit[a:b + 1].sum()),
                              "peak_date": str(idx[a + int(np.nanargmax(z[a:b + 1]))].date()),
                              "peak_z": round(float(np.nanmax(z[a:b + 1])), 2), "fire_power_mw_days": round(float(seg["frp_h"].sum()), 0),
-                             "before_2012_20_jan": bool(idx[a] < switch),
+                             "before_2012_20_jan": bool(idx[a] < switch), "normal": chosen,
                              "max_no_data_share": round(float(seg["no_data_share"].max()), 2)})
     rt = pd.DataFrame(runs)
     if len(rt):
@@ -549,26 +653,23 @@ def critical_periods(settings, cfg) -> dict:
     rt.to_csv(out / "critical_periods.csv", index=False)
     bal = pd.DataFrame(balance)
     bal.to_csv(out / "critical_days_by_era.csv", index=False)
-    found = {}
-    for name, e in (cfg.get("events") or {}).items():
-        reg = f"event:{name}"
-        ms = sorted(e["months"])
-        lo = pd.Timestamp(ms[0] + "-01")
-        hi = pd.Timestamp(ms[-1] + "-01") + pd.offsets.MonthEnd(0)
-        hit = rt[(rt["region"] == reg) & (pd.to_datetime(rt["start"]) <= hi) & (pd.to_datetime(rt["end"]) >= lo)] if len(rt) else rt
-        found[name] = hit["name"].tolist()[:3] if len(hit) else []
-    per_region = rt.groupby("region").size().to_dict() if len(rt) else {}
+    sc.to_csv(out / "critical_normal_variants.csv", index=False)
+    found = detect.get(chosen) or events_found(chosen)
     era = {}
     if len(bal):
         t = bal[bal["area"] != "global"]
         for sname, gg in t.groupby("series"):
-            era[sname] = {"median_before": float(gg["critical_days_per_year_before_2012"].median()),
-                          "median_from_2012": float(gg["critical_days_per_year_from_2012"].median()),
-                          "areas_more_after_than_before": f"{int((gg['critical_days_per_year_from_2012'] > gg['critical_days_per_year_before_2012']).sum())} of {len(gg)}"}
-    return {"runs": int(len(rt)), "runs_per_area": per_region,
+            era[sname] = {"median_before": float(gg["before_2012"].median()),
+                          "median_from_2012": float(gg[f"from_2012_to_{by[1]}"].median())}
+    edge_tbl = pd.DataFrame(edge)
+    edge_sum = (edge_tbl.groupby("era")["critical_days_at_month_edges_pct"].median().to_dict() if len(edge_tbl) else {})
+    return {"normal_rule": {"chosen": chosen, "why": why, "variants": sc.to_dict("records")},
+            "runs": int(len(rt)), "runs_per_area": rt.groupby("region").size().to_dict() if len(rt) else {},
             "events_found_as_dated_runs": found,
             "event_detection_rate_pct": round(float(100 * np.mean([bool(v) for v in found.values()])), 1) if found else None,
-            "critical_days_by_era": era, "by_era_table": bal.to_dict("records")}
+            "critical_days_by_era": era, "by_era_table": bal.to_dict("records"),
+            "month_edge_share_median_pct": edge_sum,
+            "month_edge_note": "6 of about 30 days of each month are edge days (about 20%); much more would point at the monthly factor steps"}
 
 
 # ---------------------------------------------------------------- 7. burned area
@@ -833,9 +934,12 @@ def run_checks(settings: Settings) -> dict:
         else:
             print(f"[checks] 5 KNOWN EVENTS: {ke}", flush=True)
         cpr = report["critical_periods"]
-        print(f"[checks] 6 DATED CRITICAL PERIODS: {json.dumps({k: v for k, v in cpr.items() if k != 'by_era_table'}, default=str)}", flush=True)
+        print(f"[checks] 6 DATED CRITICAL PERIODS: {json.dumps({k: v for k, v in cpr.items() if k not in ('by_era_table', 'normal_rule')}, default=str)}", flush=True)
+        if cpr.get("normal_rule"):
+            print(f"[checks] 6 NORMAL RULE: {cpr['normal_rule']['chosen']} | {cpr['normal_rule']['why']}\n"
+                  + pd.DataFrame(cpr["normal_rule"]["variants"]).to_string(index=False), flush=True)
         if cpr.get("by_era_table"):
-            print("[checks] 6 critical days per year by era (same rule on three series):\n"
+            print("[checks] 6 critical days per year by era (SHIFT with the chosen normal; others pooled):\n"
                   + pd.DataFrame(cpr["by_era_table"]).pivot(index="area", columns="series").to_string(), flush=True)
         ba = report["burned_area"]
         if "table" in ba:

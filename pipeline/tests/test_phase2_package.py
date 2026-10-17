@@ -306,3 +306,22 @@ def test_merra_resumes_and_never_leaves_a_partial_table(tmp_path, monkeypatch):
     assert r2["months"] == 3 and r2["fetched"]["already done"] == 2 and r2["fetched"]["file"] == 1
     c = pd.read_parquet(s.processed_dir / "external" / "cloud_monthly_fine.parquet")
     assert np.isclose(c["cloud"].mean(), 0.5)
+
+
+def test_era_normal_balances_a_noisier_early_era():
+    from shift.checks import daily_z
+    rng = np.random.default_rng(4)
+    idx = pd.date_range("2003-01-01", "2019-12-31")
+    early = idx < pd.Timestamp("2012-01-20")
+    sig = np.where(early, 0.9, 0.3)
+    noise = rng.lognormal(0, 1, len(idx)) ** sig / np.exp(sig ** 2 / 2)    # same mean in both eras
+    v = pd.Series(1000 * noise, index=idx)                       # same level, only the noise differs
+    rate = {}
+    for mode in ("pooled", "era_sd", "era_normal"):
+        _, z = daily_z(v, [2003, 2019], 7, 15, mode)
+        crit = np.nan_to_num(z) >= 2
+        rate[mode] = (crit[early].mean(), crit[~early].mean())
+    assert rate["pooled"][0] > 3 * max(rate["pooled"][1], 1e-4)   # the pooled normal over-flags the noisy era
+    # noise also lowers the log-scale mean, so spread alone over-corrects; the era's own normal balances
+    assert abs(rate["era_normal"][0] - rate["era_normal"][1]) < abs(rate["pooled"][0] - rate["pooled"][1]) / 3
+    assert all(0.005 < r < 0.06 for r in rate["era_normal"])
